@@ -1,0 +1,48 @@
+{
+  "name": "thread-trace",
+  "displayName": "Thread Trace — Agent Blame",
+  "description": "Hover a line to see which agent, model and prompt wrote it.",
+  "version": "0.0.1",
+  "publisher": "juliansalvador727",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited"
+    }
+  },
+  "contributes": {},
+  "scripts": {
+    "watch": "node esbuild.mjs --watch",
+    "build": "tsc --noEmit && node esbuild.mjs --production",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && vitest run",
+    "test:integration": "npm run build && node esbuild.mjs --integration && node out/test/integration/runTest.js",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.90.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "mocha": "^12.0.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}
