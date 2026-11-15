@@ -1,0 +1,9 @@
+{
+  "session_id": "5ee691c3-5633-469f-a05c-3998c3b459d2",
+  "transcript_path": "/home/user/.claude/projects/-home-user-demo-repo-src/5ee691c3-5633-469f-a05c-3998c3b459d2.jsonl",
+  "cwd": "/home/user/demo-repo/src",
+  "prompt_id": "e1141a12-b502-49a7-b092-af626e6e858a",
+  "permission_mode": "acceptEdits",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "This is a tool-behaviour probe in a throwaway repo. Do exactly these steps in order, with no extra tool calls and no questions:\n1. Use the Write tool to create a.txt (in the current directory) containing exactly three lines: alpha, beta, gamma.\n2. Use the Edit tool to replace \"beta\" with \"BETA\\nBETA2\" (two lines) in a.txt.\n3. Use the Edit tool with replace_all true to replace \"two\" with \"TWO\" in existing.txt.\n4. Use the Write tool to overwrite a.txt with four lines: alpha, BETA, BETA2, delta.\n5. Launch one general-purpose subagent with the Agent tool, and instruct it to use the Edit tool to replace \"delta\" with \"DELTA\" in a.txt and then stop.\nThen reply with the single word: done"
+}

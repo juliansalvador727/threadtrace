@@ -1,0 +1,9 @@
+{
+  "session_id": "5ee691c3-5633-469f-a05c-3998c3b459d2",
+  "transcript_path": "/home/user/.claude/projects/-home-user-demo-repo-src/5ee691c3-5633-469f-a05c-3998c3b459d2.jsonl",
+  "cwd": "/home/user/demo-repo/src",
+  "prompt_id": "49e6aecf-2563-4785-9caa-684197081af8",
+  "permission_mode": "acceptEdits",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<task-notification>\n<task-id>a7e1a9bf5533c42c8</task-id>\n<tool-use-id>toolu_01U6qcY8Ny5e2rAqDwrY1EBD</tool-use-id>\n<output-file>/tmp/claude-1000/-home-user-demo-repo-src/5ee691c3-5633-469f-a05c-3998c3b459d2/tasks/a7e1a9bf5533c42c8.output</output-file>\n<status>completed</status>\n<summary>Agent \"Replace delta in a.txt\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>The Edit tool reported: \"The file .../scratchpad/hookprobe/repo/src/a.txt has been updated successfully.\" I read that file first because the Edit tool requires it, then made the single replacement of \"delta\" with \"DELTA\" on line 4.</result>\n<usage><subagent_tokens>16756</subagent_tokens><tool_uses>2</tool_uses><duration_ms>3868</duration_ms></usage>\n</task-notification>"
+}

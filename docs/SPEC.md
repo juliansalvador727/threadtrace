@@ -524,3 +524,42 @@ Checked on Nov 15, 2026 against the [Claude Code hooks reference](https://code.c
 - The Edit `tool_response` shape. No local transcript contained an Edit call.
 - Whether a subagent's `PostToolUse` payload carries the parent's `session_id` and `transcript_path`.
 - The verbatim `UserPromptSubmit` payload, including the `prompt` field name.
+
+### Hook payloads observed (M1 step 1)
+
+Captured on Nov 15, 2026 from a real headless session (CLI 2.1.325) with logging hooks. Sanitized payloads are in `test/fixtures/hook-payloads/`. This settles the three "not verified" items above and adds four new findings.
+
+**The three open items**
+
+- **Edit `tool_response`:** `filePath`, `oldString`, `newString`, `originalFile`, `structuredPatch`, `userModified`, `replaceAll`. Each patch hunk is `{ oldStart, oldLines, newStart, newLines, lines }` with `+`/`-`/space-prefixed lines. Write has the same patch with `type: "update"`, and an empty patch plus `content` with `type: "create"`. So written line numbers and removed lines come from the payload; the hook doesn't need to read the file or search for `new_string`. For a Write that overwrites a file, only the changed lines need attributing, not the whole file.
+- **Subagent `PostToolUse`:** carries the parent's `session_id`, `transcript_path` and `prompt_id`, plus `agent_id` and `agent_type`. The subagent's own entries are in `<transcript dir>/<session_id>/subagents/agent-<agent_id>.jsonl`, not in the main transcript.
+- **`UserPromptSubmit`:** the prompt is in `prompt`, with `prompt_id`, `permission_mode`, `session_id`, `transcript_path` and `cwd`.
+
+**New findings**
+
+1. **The current tool call is not in the transcript when `PostToolUse` runs.** In all five edits, the assistant entry holding the `tool_use` reached disk after the hook ran. On the first edit of the session the transcript had no assistant entry at all, so "read the last assistant entry" returns nothing or the previous message's model. An `api-request` entry with `params.model` is on disk by then. The reliable source is a join on `tool_use_id` after the fact, so the hook should record a best-effort model and the read layer should correct it from the transcript.
+2. **The transcript file doesn't exist yet** at `SessionStart` or at the first `UserPromptSubmit`. `SessionStart` carried no `model` field.
+3. **`UserPromptSubmit` also fires for synthetic prompts.** A background subagent finishing produced a second `UserPromptSubmit` whose `prompt` starts with `<task-notification>`, with a new `prompt_id`. The hook payload has nothing that marks it as synthetic; the transcript entry does (`promptSource: "system"`, `origin.kind: "task-notification"`). Headless prompts have `promptSource: "sdk"`, not `"typed"`.
+4. **Subagent edits can arrive after the main turn's `Stop`.** The background subagent's edit ran after `Stop` fired, still under the original `prompt_id`. A `Stop`-based verification pass can't assume the turn's edits are complete.
+
+**Also observed**
+
+- `cwd` was a subdirectory of the repo, and the transcript's project folder is encoded from that `cwd`, not from the repo root. `tool_input.file_path` is absolute.
+- Hook processes get `CLAUDE_PROJECT_DIR`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_EXECPATH`; the last ends in the CLI version, which gives the agent version without reading the transcript.
+- `Stop` carries `last_assistant_message` and `background_tasks`; `SubagentStop` carries `agent_transcript_path`.
+- Reading a 240 KB transcript in full took about 2 ms.
+
+### M1 decisions
+
+Decided on Nov 15, 2026. Where these differ from the sections above, these are what the code does.
+
+- **Turn id** is `${session_id}:${prompt_id}`, not `${session_id}:${turnIndex}`. The hook has no state to count turns with, and every prompt and edit payload carries `prompt_id`.
+- **Model** is recorded by the hook as a best-effort value: whichever is newer of the last assistant entry and the last `api-request` entry in the transcript tail (the subagent's own transcript for subagent edits). The read layer (M2) corrects it by matching `tool_use_id` while the transcript still exists. Storing it in the record keeps the model after Claude Code deletes old transcripts.
+- **Project-scope install** writes to `.claude/settings.local.json`, not `.claude/settings.json`, so the hook never runs in cloud sessions or for teammates who don't have the script. User scope (`~/.claude/settings.json`) is still offered. Both show the diff and need confirmation.
+- **Hook command** is `node "<absolute path>/tt-capture.js" prompt|edit`, with the absolute path instead of `~`.
+- **Line ranges** come from `tool_response.structuredPatch`. Searching the post-edit file for `new_string` is only a fallback for payloads without a patch. A Write over an existing file attributes only the lines it changed.
+- **Schema additions:** `Hunk.loose` (loose hash per line, parallel to `hashes`), `Edit.agent_id` (subagent edits), and `Turn.origin` (`'human'` or `'agent'`). A prompt the agent submitted itself, such as a background-task notification, is recorded as an `'agent'` turn with an empty `prompt`.
+- **Loose hash** removes all whitespace from the line, not just runs of it.
+- **Capture settings** reach the hook through an optional `~/.thread-trace/config.json` (`{ "prompt": "full" | "firstLine" | "none", "redact": ["regex", …] }`). The extension doesn't write this file yet; the settings UI is M5.
+- **Records live in the shared git dir**, so linked worktrees of one repo write to the same `thread-trace/` folder.
+- **Extra files** beyond the layout: `src/capture/capture.ts` (the logic, separate from the entry so it can be tested), `src/capture/gitDir.ts`, and `src/install/hookConfig.ts` (the settings merge, free of `vscode`).

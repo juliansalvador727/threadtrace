@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 // These tests run against the built bundles; `npm test` builds first.
 const root = path.resolve(__dirname, '../..');
@@ -23,6 +24,11 @@ describe('build outputs', () => {
 // Acceptance test 9 (failure isolation), as far as it applies before M1:
 // whatever arrives on stdin, the hook exits 0 and stays silent on stdout.
 describe('tt-capture never affects the agent', () => {
+  // Keep the hook's failure log out of the real ~/.thread-trace.
+  const home = mkdtempSync(path.join(os.tmpdir(), 'tt-scaffold-'));
+  const env = { ...process.env, THREAD_TRACE_HOME: home };
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
   const cases: [name: string, mode: string, stdin: string][] = [
     ['edit with malformed JSON', 'edit', '{not json'],
     ['prompt with malformed JSON', 'prompt', '{"session_id": '],
@@ -36,6 +42,7 @@ describe('tt-capture never affects the agent', () => {
       input: stdin,
       encoding: 'utf8',
       timeout: 5000,
+      env,
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
@@ -47,6 +54,7 @@ describe('tt-capture never affects the agent', () => {
       input: '',
       encoding: 'utf8',
       timeout: 5000,
+      env,
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('');

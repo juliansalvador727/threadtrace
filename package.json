@@ -23,7 +23,20 @@
       "supported": "limited"
     }
   },
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "threadTrace.installHooks",
+        "title": "Thread Trace: Install Agent Hooks",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "threadTrace.uninstallHooks",
+        "title": "Thread Trace: Uninstall Agent Hooks",
+        "enablement": "isWorkspaceTrusted"
+      }
+    ]
+  },
   "scripts": {
     "watch": "node esbuild.mjs --watch",
     "build": "tsc --noEmit && node esbuild.mjs --production",

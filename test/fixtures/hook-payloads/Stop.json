@@ -1,0 +1,23 @@
+{
+  "session_id": "5ee691c3-5633-469f-a05c-3998c3b459d2",
+  "transcript_path": "/home/user/.claude/projects/-home-user-demo-repo-src/5ee691c3-5633-469f-a05c-3998c3b459d2.jsonl",
+  "cwd": "/home/user/demo-repo/src",
+  "prompt_id": "e1141a12-b502-49a7-b092-af626e6e858a",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "done",
+  "background_tasks": [
+    {
+      "id": "a7e1a9bf5533c42c8",
+      "type": "subagent",
+      "status": "running",
+      "description": "Replace delta in a.txt",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

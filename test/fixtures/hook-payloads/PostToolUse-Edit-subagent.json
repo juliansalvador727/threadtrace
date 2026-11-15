@@ -1,0 +1,47 @@
+{
+  "session_id": "5ee691c3-5633-469f-a05c-3998c3b459d2",
+  "transcript_path": "/home/user/.claude/projects/-home-user-demo-repo-src/5ee691c3-5633-469f-a05c-3998c3b459d2.jsonl",
+  "cwd": "/home/user/demo-repo/src",
+  "prompt_id": "e1141a12-b502-49a7-b092-af626e6e858a",
+  "permission_mode": "acceptEdits",
+  "agent_id": "a7e1a9bf5533c42c8",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/demo-repo/src/a.txt",
+    "old_string": "delta",
+    "new_string": "DELTA",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/home/user/demo-repo/src/a.txt",
+    "oldString": "delta",
+    "newString": "DELTA",
+    "originalFile": "alpha\nBETA\nBETA2\ndelta",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 4,
+        "newStart": 1,
+        "newLines": 4,
+        "lines": [
+          " alpha",
+          " BETA",
+          " BETA2",
+          "-delta",
+          "\\ No newline at end of file",
+          "+DELTA",
+          "\\ No newline at end of file"
+        ]
+      }
+    ],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu_01EpHZjYYLA8TNajhvCXatMi",
+  "duration_ms": 55
+}
