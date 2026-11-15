@@ -56,22 +56,46 @@ async function nodeAvailableOrAccepted(): Promise<boolean> {
   return choice === 'Install Anyway';
 }
 
-async function pickTarget(action: string): Promise<Target | undefined> {
-  const targets: Target[] = [];
+function targets(): Target[] {
+  const list: Target[] = [];
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
-    targets.push({
+    list.push({
       label: 'This project',
       description: '.claude/settings.local.json (stays on this machine, not committed)',
       file: path.join(folder.uri.fsPath, '.claude', 'settings.local.json'),
     });
   }
-  targets.push({
+  list.push({
     label: 'All projects',
     description: '~/.claude/settings.json',
     file: path.join(os.homedir(), '.claude', 'settings.json'),
   });
-  return vscode.window.showQuickPick(targets, { title: `Thread Trace: ${action} agent hooks`, placeHolder: 'Where?' });
+  return list;
+}
+
+/** A file that can't be read or parsed stays in the list, so the error is shown once it's picked. */
+function mayHaveHooks(target: Target): boolean {
+  try {
+    return hasHooks(parseSettings(readIfExists(target.file)));
+  } catch {
+    return true;
+  }
+}
+
+async function pickTarget(install: boolean): Promise<Target | undefined> {
+  const action = install ? 'Install' : 'Uninstall';
+  let list = targets();
+  if (!install) {
+    // Uninstall offers only the files that have the hooks; with one, the confirmation names it.
+    list = list.filter(mayHaveHooks);
+    if (list.length === 0) {
+      void vscode.window.showInformationMessage('Thread Trace: no hooks are installed.');
+      return undefined;
+    }
+    if (list.length === 1) return list[0];
+  }
+  return vscode.window.showQuickPick(list, { title: `Thread Trace: ${action} agent hooks`, placeHolder: 'Where?' });
 }
 
 function readIfExists(file: string): string | undefined {
@@ -112,7 +136,7 @@ async function change(context: vscode.ExtensionContext, preview: SettingsPreview
     void vscode.window.showWarningMessage('Thread Trace: hook changes are disabled in untrusted workspaces.');
     return;
   }
-  const target = await pickTarget(action);
+  const target = await pickTarget(install);
   if (!target) return;
   if (install && !(await nodeAvailableOrAccepted())) return;
 

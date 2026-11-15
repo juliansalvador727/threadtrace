@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import type { GitService } from '../git/gitService';
 import type { Attribution } from '../store/schema';
-import { ColorSlots, ownerOf, summarize, type FileSummary, type OwnerKind } from './fileSummary';
+import { ColorSlots, heatmapBarSvg, ownerOf, summarize, type FileSummary, type OwnerKind } from './fileSummary';
 
 /** A whole-file blame is one git call over the buffer; skip files where that would be slow. */
 const MAX_LINES = 10_000;
@@ -21,8 +21,9 @@ export const PALETTE: readonly { light: string; dark: string }[] = [
   { light: '#6a8a00', dark: '#b5cc4b' },
 ];
 
-/** Solid for a recorded line, dashed once a human changed it, dotted when only the commit message says so. */
-const BORDER: Record<OwnerKind, string> = { agent: 'solid', modified: 'dashed', commit: 'dotted' };
+function bar(color: string, kind: OwnerKind): vscode.Uri {
+  return vscode.Uri.parse(`data:image/svg+xml;base64,${Buffer.from(heatmapBarSvg(color, kind)).toString('base64')}`);
+}
 
 export interface FileScan {
   uri: vscode.Uri;
@@ -172,11 +173,10 @@ export class Heatmap implements vscode.Disposable {
       const color = PALETTE[slot];
       decoration = vscode.window.createTextEditorDecorationType({
         isWholeLine: true,
-        borderStyle: BORDER[kind],
-        borderWidth: '0 0 0 3px',
+        gutterIconSize: '100% 100%',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
-        light: { borderColor: color.light, overviewRulerColor: color.light },
-        dark: { borderColor: color.dark, overviewRulerColor: color.dark },
+        light: { gutterIconPath: bar(color.light, kind), overviewRulerColor: color.light },
+        dark: { gutterIconPath: bar(color.dark, kind), overviewRulerColor: color.dark },
       });
       this.decorations.set(key, decoration);
     }

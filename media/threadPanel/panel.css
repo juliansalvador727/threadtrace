@@ -157,10 +157,16 @@ pre.diff {
   overflow-x: auto;
 }
 
+/* Rows are block spans with nothing between them: a newline there would render as a blank line. */
 pre.diff span {
   display: block;
   padding: 0 10px;
   min-width: max-content;
+}
+
+/* A blank line in the diff still takes a line's height. */
+pre.diff span:empty::before {
+  content: ' ';
 }
 
 pre.diff .add {

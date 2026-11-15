@@ -5,7 +5,7 @@ Full spec: docs/SPEC.md. Read the relevant section before starting a milestone.
 
 The last sections of docs/SPEC.md ("Capture: verified differences" and its
 subsections "Hook payloads observed", "M1 decisions", "M2 decisions",
-"M3 decisions", "M4 decisions", "M5 decisions") are newer than the rest and override it where
+"M3 decisions", "M4 decisions", "M5 decisions", "Publishing decisions") are newer than the rest and override it where
 they disagree. Read them before touching capture, backfill, the schema, the
 store, the resolver or the UI.
 Record new decisions the same way, in an "Mn decisions" subsection.
@@ -56,23 +56,20 @@ Record new decisions the same way, in an "Mn decisions" subsection.
 ## Milestones
 
 - M0 scaffold: done.
-- M1 capture: done. Hook, redaction, install/uninstall commands. The installer's
-  interactive flow (picker, diff, confirm) has not been tried by hand yet.
+- M1 capture: done. Hook, redaction, install/uninstall commands.
 - M2 resolve and annotate: done. TraceStore, GitService, Resolver, end-of-line
   annotation, hover card, model correction from the transcript.
 - M3 thread panel: done. Transcript adapter, webview, scroll to tool_use_id.
 - M4 backfill and trailers: done. `threadTrace.backfill`, `commit` confidence
   from trailers, the `--follow` rename map, `blame.detectMoves`,
   `hover.mode: "anywhere"`. The squash-merge window turned out not to be needed.
-  The backfill command's progress notification has not been tried by hand yet.
 - M5 polish: done, except publishing. Heatmap, status bar summary and legend,
   Agent Threads view, Agent Trace export, capture settings synced to
-  ~/.thread-trace/config.json. Not tried by hand yet: how the heatmap bars and the
-  legend's color swatches look, the Agent Threads view in the Explorer, and the
-  export's preview and confirmation dialog.
+  ~/.thread-trace/config.json.
 - Publishing (Marketplace, Open VSX): README, LICENSE (MIT), icon (media/icon.png)
-  and manifest metadata done. Still needs a version bump, a
-  `vsce package` + install of the .vsix, and the by-hand checks above.
+  and manifest metadata done. The packaged .vsix passes the integration suite
+  when installed into a clean profile, and every UI flow has been checked by hand
+  (2026-11-15). Still needs a version bump, then `vsce publish` / `ovsx publish`.
 - v1.1 (spec, "Phasing"): next. Intent + trigger, rationale snippet, verified badge,
   Continue this thread.
 

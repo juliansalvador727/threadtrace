@@ -649,11 +649,11 @@ Decided on Nov 15, 2026. Where these differ from "Other surfaces", "Commands", "
 
 **Heatmap and status bar**
 
-- **The bar is a 3px left border on the whole line**, not a gutter icon, so it needs no image files and doesn't cover breakpoints. The same color marks the overview ruler.
+- **The bar is a gutter icon** (changed in "Publishing decisions"; it was a 3px left border on the whole line). The same color marks the overview ruler.
 - **One color per model name as shown** (`Claude Opus 5.5`), from a six-color palette with light and dark values, handed out in the order models are first seen in the window. A line known only from a commit trailer takes the co-author's name, so it shares a color with recorded lines of that model.
 - **Border style is the confidence:** solid for `exact` and `likely`, dashed for `modified`, dotted for `commit`.
 - **`✦ 62% agent` counts non-blank lines.** `modified` and `commit` lines count as agent lines. The item is hidden for a file with no agent lines. A share under 0.5% shows as `<1%`.
-- **The legend is a quick pick** (`threadTrace.showLegend`): one row per model with its line count and color swatch, a row for the rest of the file, and an entry that toggles the heatmap. The swatch icons have not been checked by eye.
+- **The legend is a quick pick** (`threadTrace.showLegend`): one row per model with its line count and color swatch, a row for the rest of the file, and an entry that toggles the heatmap. The swatches were checked by eye in dark and light themes.
 
 **Agent Threads view**
 
@@ -691,3 +691,12 @@ Decided on Nov 15, 2026. Where these differ from "Other surfaces", "Commands", "
 - **Packages hold only the two bundles.** A plain or production build empties `dist/` first, and `.vscodeignore` includes `dist/*.js` only, so stale source maps from dev builds aren't shipped.
 - **The card's Diff link finds the file's path on each side of the commit** (`commitFileChange` in `src/git/log.ts`). It used to diff `<sha>~1` against `<sha>` under the current path, which failed for a file the commit added, for the root commit, and for commits from before a rename. Now the right side is the current path or a former name that exists in the commit, and the left side comes from `git diff-tree -M` against the first parent: the old name for a rename, nothing for an added file or a root commit (shown as an empty document, titled "added in <sha>"). A merge is compared with its first parent. A file that isn't in the commit gives a message instead of an error.
 - **Extra files:** `src/install/hookScript.ts` (no `vscode`), `test/unit/hookScript.test.ts`.
+
+### Publishing decisions
+
+Decided on Nov 15, 2026, from the by-hand checks of the packaged .vsix. Where these differ from the sections above, these are what the code does.
+
+- **The heatmap bar moved to the gutter.** A whole-line left border is drawn inside the text area, so it touched the first character of every line. The bar is now an SVG gutter icon (`heatmapBarSvg` in `fileSummary.ts`), a 3px bar at the icon's right edge stretched to the line height. Solid, dashed and dotted segments still show the confidence. With a breakpoint on the same line, VS Code widens the glyph margin and shows both.
+- **Diff rows in the thread panel are joined with nothing between them.** They are block spans inside a `<pre>`, so a newline between rows rendered as a blank line. An empty row still takes a line's height.
+- **The thread panel keeps the reader's scroll position across reloads.** VS Code reloads a hidden webview's page when it is shown again. `panel.js` saves the scroll position in the webview state under the render's nonce. The same nonce means a reload, which restores the position. A new nonce means a new `show`, which scrolls to the target. A page that loads before it is laid out waits for its first resize before scrolling.
+- **Uninstall offers only the settings files that have the hooks.** With one, it goes straight to the diff and confirmation, which name the file. With none, it says so. A file that can't be parsed stays in the list, so its error is shown when it is picked.

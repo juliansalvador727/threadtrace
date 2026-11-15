@@ -199,3 +199,15 @@ export function fileThreads(edits: Edit[], turnOf: (id: string) => Turn | undefi
   }
   return threads.sort((a, b) => (a.newest.ts < b.newest.ts ? 1 : a.newest.ts > b.newest.ts ? -1 : 0));
 }
+
+/**
+ * The heatmap's gutter icon: a 3px bar at the right of the glyph margin, next
+ * to the line numbers, stretched to the line's height. The pattern is the
+ * confidence: solid for a recorded line, dashed once a human changed it,
+ * dotted when only the commit message says so. `color` is a hex from the palette.
+ */
+export function heatmapBarSvg(color: string, kind: OwnerKind): string {
+  const segments = kind === 'agent' ? [[0, 20]] : kind === 'modified' ? [[1, 6], [11, 6]] : [[1, 3], [6, 3], [11, 3], [16, 3]];
+  const rects = segments.map(([y, h]) => `<rect x="13" y="${y}" width="3" height="${h}" fill="${color}"/>`).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="20" viewBox="0 0 16 20" preserveAspectRatio="none">${rects}</svg>`;
+}

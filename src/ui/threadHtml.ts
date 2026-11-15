@@ -124,7 +124,7 @@ function editHtml(item: Extract<ThreadItem, { kind: 'edit' }>, view: ThreadView)
   return [
     `<article class="edit${target}" data-tool="${escapeHtml(item.id)}">`,
     `<header><span class="verb">${verb}</span> <span class="file">${escapeHtml(displayPath(item.file, view.root))}</span>${status}</header>`,
-    rows.length > 0 ? `<pre class="diff">${rows.join('\n')}</pre>` : '',
+    rows.length > 0 ? `<pre class="diff">${rows.join('')}</pre>` : '',
     '</article>',
   ].join('');
 }

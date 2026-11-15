@@ -192,9 +192,11 @@ describe('renderThreadHtml', () => {
   it('shows edits as diffs, with paths relative to the repo, and marks the target', () => {
     expect(html).toContain('<article class="edit target" data-tool="toolu_edit">');
     expect(html).toContain('<span class="verb">Edited</span> <span class="file">src/a.txt</span>');
-    expect(html).toContain('<span class="hunk">@@ line 1 @@</span>\n<span class="ctx"> alpha</span>\n<span class="del">-beta</span>\n<span class="add">+BETA</span>');
+    expect(html).toContain('<span class="hunk">@@ line 1 @@</span><span class="ctx"> alpha</span><span class="del">-beta</span><span class="add">+BETA</span>');
     expect(html).toContain('<span class="verb">Created</span> <span class="file">src/new.txt</span>');
-    expect(html).toContain('<span class="add">+one</span>\n<span class="add">+two</span></pre>');
+    expect(html).toContain('<span class="add">+one</span><span class="add">+two</span></pre>');
+    // The rows are block elements: a newline between them would show as a blank line.
+    expect(html).not.toMatch(/<\/span>\n<span/);
     expect(html).toContain('<span class="verb">Rewrote</span>');
     expect(html).toContain('<span class="failed">not applied</span>');
     expect(html.match(/class="edit target"/g)).toHaveLength(1);

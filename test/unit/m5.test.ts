@@ -9,7 +9,7 @@ import { mergeCaptureConfig, syncCaptureConfig } from '../../src/install/capture
 import { Resolver } from '../../src/resolve/resolver';
 import type { Attribution } from '../../src/store/schema';
 import { TraceStore } from '../../src/store/traceStore';
-import { ColorSlots, fileThreads, legendRows, ownerOf, statusText, summarize } from '../../src/ui/fileSummary';
+import { ColorSlots, fileThreads, heatmapBarSvg, legendRows, ownerOf, statusText, summarize } from '../../src/ui/fileSummary';
 import { DAY, MINUTE, SESSION, T0, TestRepo } from './helpers/repo';
 
 // M5: whole-file resolution (heatmap, status bar), the Agent Threads view's
@@ -176,6 +176,16 @@ describe('file summary', () => {
     expect(ownerOf(odd)?.label).toBe('Claude $(alert) **x**');
     const slots = new ColorSlots(2);
     expect([slots.of('a'), slots.of('b'), slots.of('a'), slots.of('c')]).toEqual([0, 1, 0, 0]);
+  });
+
+  it('draws the heatmap bar in the gutter, its pattern showing the confidence', () => {
+    const rects = (svg: string) => svg.match(/<rect /g)?.length;
+    expect(rects(heatmapBarSvg('#5aa9f0', 'agent'))).toBe(1);
+    expect(rects(heatmapBarSvg('#5aa9f0', 'modified'))).toBe(2);
+    expect(rects(heatmapBarSvg('#5aa9f0', 'commit'))).toBe(4);
+    // Every segment sits at the right edge of the icon, away from the breakpoint.
+    expect(heatmapBarSvg('#5aa9f0', 'commit').match(/x="(\d+)"/g)).toEqual(Array(4).fill('x="13"'));
+    expect(heatmapBarSvg('#5aa9f0', 'agent')).toContain('fill="#5aa9f0"');
   });
 });
 
