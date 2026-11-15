@@ -2,7 +2,7 @@
   "name": "thread-trace",
   "displayName": "Thread Trace — Agent Blame",
   "description": "Hover a line to see which agent, model and prompt wrote it.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "juliansalvador727",
   "license": "MIT",
   "icon": "media/icon.png",
