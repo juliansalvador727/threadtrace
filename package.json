@@ -4,12 +4,34 @@
   "description": "Hover a line to see which agent, model and prompt wrote it.",
   "version": "0.0.1",
   "publisher": "juliansalvador727",
-  "private": true,
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juliansalvador727/threadtrace.git"
+  },
+  "bugs": {
+    "url": "https://github.com/juliansalvador727/threadtrace/issues"
+  },
+  "homepage": "https://github.com/juliansalvador727/threadtrace#readme",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
+    "AI",
+    "Visualization",
     "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "ai",
+    "agent",
+    "blame",
+    "git blame",
+    "attribution",
+    "provenance",
+    "agent trace"
   ],
   "activationEvents": [
     "onStartupFinished"

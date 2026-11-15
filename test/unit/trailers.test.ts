@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Git } from '../../src/git/exec';
-import { formerPaths, lineHistory } from '../../src/git/log';
+import { commitFileChange, formerPaths, lineHistory } from '../../src/git/log';
 import { commitTrailers, hasAgentTrailer, parseTrailers } from '../../src/git/trailers';
 import { MINUTE, T0, TestRepo } from './helpers/repo';
 
@@ -110,5 +110,79 @@ describe('formerPaths', () => {
     const git = new Git(repo.root);
     expect(await formerPaths(git, 'lib/third näme.ts')).toEqual(['src/second.ts', 'src/first.ts']);
     expect(await formerPaths(git, 'src/missing.ts')).toEqual([]);
+  });
+});
+
+describe('commitFileChange', () => {
+  let repo: TestRepo;
+  let git: Git;
+  const body = Array.from({ length: 12 }, (_, i) => `export const value${i} = ${i};`).join('\n') + '\n';
+  beforeEach(() => {
+    repo = new TestRepo();
+    git = new Git(repo.root);
+  });
+  afterEach(() => repo.dispose());
+
+  it('has no left side in the root commit', async () => {
+    repo.write('a.ts', body);
+    const root = repo.commit('Add', T0);
+    expect(await commitFileChange(git, root, 'a.ts')).toEqual({ after: 'a.ts' });
+  });
+
+  it('has no left side for a file the commit added', async () => {
+    repo.write('a.ts', body);
+    repo.commit('Add a', T0);
+    repo.write('src/b.ts', body);
+    const added = repo.commit('Add b', T0 + MINUTE);
+    expect(await commitFileChange(git, added, 'src/b.ts')).toEqual({ after: 'src/b.ts' });
+  });
+
+  it('uses the same path on both sides for a modified file', async () => {
+    repo.write('a.ts', body);
+    repo.commit('Add', T0);
+    repo.write('a.ts', body + 'export const more = 1;\n');
+    const changed = repo.commit('Change', T0 + MINUTE);
+    expect(await commitFileChange(git, changed, 'a.ts')).toEqual({ before: 'a.ts', after: 'a.ts' });
+  });
+
+  it('follows a rename in the commit', async () => {
+    repo.write('old name.ts', body);
+    repo.commit('Add', T0);
+    repo.git('mv', 'old name.ts', 'new näme.ts');
+    repo.write('new näme.ts', body + 'export const more = 1;\n');
+    const renamed = repo.commit('Rename and change', T0 + MINUTE);
+    expect(await commitFileChange(git, renamed, 'new näme.ts')).toEqual({ before: 'old name.ts', after: 'new näme.ts' });
+  });
+
+  it('finds the former name in a commit from before a later rename', async () => {
+    repo.write('src/first.ts', body);
+    const added = repo.commit('Add', T0);
+    repo.write('src/first.ts', body + 'export const more = 1;\n');
+    const changed = repo.commit('Change', T0 + MINUTE);
+    repo.git('mv', 'src/first.ts', 'src/second.ts');
+    repo.commit('Rename', T0 + 2 * MINUTE);
+    expect(await commitFileChange(git, changed, 'src/second.ts')).toEqual({ before: 'src/first.ts', after: 'src/first.ts' });
+    expect(await commitFileChange(git, added, 'src/second.ts')).toEqual({ after: 'src/first.ts' });
+  });
+
+  it('compares a merge with its first parent', async () => {
+    repo.write('a.ts', body);
+    repo.commit('Add a', T0);
+    repo.git('checkout', '-q', '-b', 'side');
+    repo.write('b.ts', body);
+    repo.commit('Add b on side', T0 + MINUTE);
+    repo.git('checkout', '-q', 'main');
+    repo.write('a.ts', body + 'export const more = 1;\n');
+    repo.commit('Change a', T0 + 2 * MINUTE);
+    repo.git('merge', '-q', '--no-edit', 'side');
+    const merge = repo.git('rev-parse', 'HEAD');
+    expect(await commitFileChange(git, merge, 'b.ts')).toEqual({ after: 'b.ts' });
+    expect(await commitFileChange(git, merge, 'a.ts')).toEqual({ before: 'a.ts', after: 'a.ts' });
+  });
+
+  it('is undefined for a file that is not in the commit', async () => {
+    repo.write('a.ts', body);
+    const root = repo.commit('Add', T0);
+    expect(await commitFileChange(git, root, 'missing.ts')).toBeUndefined();
   });
 });

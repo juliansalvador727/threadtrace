@@ -70,8 +70,9 @@ Record new decisions the same way, in an "Mn decisions" subsection.
   ~/.thread-trace/config.json. Not tried by hand yet: how the heatmap bars and the
   legend's color swatches look, the Agent Threads view in the Explorer, and the
   export's preview and confirmation dialog.
-- Publishing (Marketplace, Open VSX): not started. Needs a README, LICENSE and icon,
-  `private` removed, and the three by-hand checks above.
+- Publishing (Marketplace, Open VSX): README, LICENSE (MIT), icon (media/icon.png)
+  and manifest metadata done. Still needs a version bump, a
+  `vsce package` + install of the .vsix, and the by-hand checks above.
 - v1.1 (spec, "Phasing"): next. Intent + trigger, rationale snippet, verified badge,
   Continue this thread.
 

@@ -3,6 +3,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { GitService, RepoServices } from '../git/gitService';
+import { commitFileChange } from '../git/log';
 import type { Attribution, CommitInfo, Edit, Turn } from '../store/schema';
 import { annotationText, compactLine, renderCard, type Card, type CardFilter } from './hoverCard';
 import type { Revealed, ThreadPanels } from './threadPanel';
@@ -268,6 +269,8 @@ function commitsOf(attribution: Attribution): CommitInfo[] {
 }
 
 const SHA = /^[0-9a-f]{7,64}$/;
+/** Serves an empty document: the left side of the diff for a file a commit added. */
+const EMPTY_SCHEME = 'thread-trace-empty';
 /** Trailers are untrusted; trailers.ts keeps only claude.ai links, and this checks again before opening one. */
 const SESSION_URL = /^https:\/\/claude\.ai\//;
 
@@ -307,6 +310,7 @@ export function registerAnnotation(
     });
 
   context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(EMPTY_SCHEME, { provideTextDocumentContent: () => '' }),
     annotation,
     command('threadTrace.toggleAnnotation', async () => {
       const config = vscode.workspace.getConfiguration('threadTrace');
@@ -375,15 +379,29 @@ export function registerAnnotation(
       vscode.window.setStatusBarMessage('Thread Trace: commit hash copied', 2000);
     }),
     command('threadTrace.openCommitDiff', async (sha, file) => {
-      const root = annotation.current?.repo.root;
-      if (typeof sha !== 'string' || !SHA.test(sha) || typeof file !== 'string' || !root) return;
+      const repo = annotation.current?.repo;
+      if (typeof sha !== 'string' || !SHA.test(sha) || typeof file !== 'string' || !repo) return;
+      const root = repo.root;
       const target = path.resolve(root, file);
       // The path comes from a link: keep it inside the repo.
       if (path.relative(root, target).startsWith('..')) return;
-      const uri = vscode.Uri.file(target);
-      const [before, after] = await Promise.all([git.toGitUri(uri, `${sha}~1`), git.toGitUri(uri, sha)]);
+      const change = await commitFileChange(repo.git, sha, path.relative(root, target).split(path.sep).join('/'));
+      if (!change) {
+        void vscode.window.showInformationMessage(`Thread Trace: ${path.basename(file)} is not in commit ${sha.slice(0, 7)}.`);
+        return;
+      }
+      const at = (rel: string) => vscode.Uri.file(path.join(root, rel));
+      const [before, after] = await Promise.all([
+        // A file the commit added has an empty left side, as in git's own diff.
+        change.before ? git.toGitUri(at(change.before), `${sha}^1`) : vscode.Uri.from({ scheme: EMPTY_SCHEME, path: `/${path.basename(change.after)}` }),
+        git.toGitUri(at(change.after), sha),
+      ]);
       if (!before || !after) throw new Error('the built-in Git extension is not available.');
-      await vscode.commands.executeCommand('vscode.diff', before, after, `${path.basename(file)} (${sha.slice(0, 7)})`);
+      const name = change.before && change.before !== change.after
+        ? `${path.basename(change.before)} → ${path.basename(change.after)}`
+        : path.basename(change.after);
+      const what = change.before ? sha.slice(0, 7) : `added in ${sha.slice(0, 7)}`;
+      await vscode.commands.executeCommand('vscode.diff', before, after, `${name} (${what})`);
     }),
     command('threadTrace.hoverFilter', (filter) => {
       if (filter === 'all' || filter === 'threads' || filter === 'commits') annotation.setFilter(filter);

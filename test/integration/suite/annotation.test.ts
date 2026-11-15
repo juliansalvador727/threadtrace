@@ -1,4 +1,5 @@
 import * as assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ThreadTraceApi } from '../../../src/ui/annotation';
@@ -113,5 +114,26 @@ describe('line annotation', () => {
     editor.selection = new vscode.Selection(2, 0, 2, 0);
     await vscode.commands.executeCommand('threadTrace.copyPrompt');
     assert.strictEqual(await vscode.env.clipboard.readText(), 'Add a total helper');
+  });
+
+  it('diffs a file against an empty left side in the commit that added it', async () => {
+    const workspace = path.dirname(file.fsPath);
+    const sha = execFileSync('git', ['log', '--format=%H', '--diff-filter=A', '--', 'app.ts'], { cwd: workspace, encoding: 'utf8' }).trim();
+    const editor = await vscode.window.showTextDocument(file);
+    editor.selection = new vscode.Selection(2, 0, 2, 0);
+    await api.resolveLine(file, 2);
+    let input: unknown;
+    for (let i = 0; i < 40 && !(input instanceof vscode.TabInputTextDiff); i++) {
+      await vscode.commands.executeCommand('threadTrace.openCommitDiff', sha, 'app.ts');
+      input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+      if (!(input instanceof vscode.TabInputTextDiff)) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(input instanceof vscode.TabInputTextDiff, 'no diff editor opened');
+    assert.strictEqual(input.original.scheme, 'thread-trace-empty');
+    assert.strictEqual(input.modified.scheme, 'git');
+    assert.match(vscode.window.tabGroups.activeTabGroup.activeTab?.label ?? '', /^app\.ts \(added in [0-9a-f]{7}\)$/);
+    const modified = await vscode.workspace.openTextDocument(input.modified);
+    assert.ok(modified.getText().includes('typedByHand'), 'the right side is not the committed file');
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
   });
 });
