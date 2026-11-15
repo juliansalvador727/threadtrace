@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -13,6 +13,16 @@ describe('build outputs', () => {
   it('produces dist/extension.js and dist/tt-capture.js', () => {
     expect(existsSync(extensionBundle)).toBe(true);
     expect(existsSync(captureBundle)).toBe(true);
+  });
+
+  it('leaves only the two bundles in dist/, with no stale source maps', () => {
+    expect(readdirSync(path.join(root, 'dist')).sort()).toEqual(['extension.js', 'tt-capture.js']);
+  });
+
+  it('packages only the bundles from dist/', () => {
+    const ignore = readFileSync(path.join(root, '.vscodeignore'), 'utf8').split('\n');
+    expect(ignore).toContain('!dist/*.js');
+    expect(ignore).not.toContain('!dist/**');
   });
 
   it('keeps vscode out of the standalone capture bundle', () => {

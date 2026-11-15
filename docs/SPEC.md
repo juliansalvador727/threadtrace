@@ -682,3 +682,11 @@ Decided on Nov 15, 2026. Where these differ from "Other surfaces", "Commands", "
 - **`threadTrace.heatmap.enabled`** and `threadTrace.toggleHeatmap` are window-scoped like the annotation's.
 - **Not done:** publishing to the Marketplace and Open VSX. The package is still `private`, with no README, LICENSE or icon.
 - **Extra files** beyond the layout: `src/ui/fileSummary.ts` (summary, legend rows, color slots and thread rows; no `vscode`), `src/install/captureConfig.ts` (no `vscode`), `test/unit/m5.test.ts`, `test/integration/suite/m5.test.ts`.
+
+**Before publishing** (Nov 15, 2026)
+
+- **The installed hook script follows the extension.** On activation, if `bin/tt-capture.js` exists under the trace home and differs from the bundled one, it is replaced (copied to a temporary file, then renamed, so a hook starting at that moment never reads half a script). A missing script is never created, because that means the hooks aren't installed, and settings files are never touched, so no confirmation is needed. Failures are logged and the old script keeps working. Two VS Code installs with different extension versions will each put back their own copy; that is accepted.
+- **The script path honors `THREAD_TRACE_HOME`**, like the rest of the trace home, so tests never touch the real `~/.thread-trace/bin`.
+- **The installer checks for `node` on PATH** before showing the diff, because the hook command is `node "<script>"` and Claude Code's native installer doesn't bring Node. If it isn't found, a modal warning explains that nothing would be recorded and offers "Install Anyway"; VS Code's PATH can differ from Claude Code's, so a miss is a warning, not a refusal. The command keeps a bare `node` rather than an absolute path, which would break when a version manager switches Node versions.
+- **Packages hold only the two bundles.** A plain or production build empties `dist/` first, and `.vscodeignore` includes `dist/*.js` only, so stale source maps from dev builds aren't shipped.
+- **Extra files:** `src/install/hookScript.ts` (no `vscode`), `test/unit/hookScript.test.ts`.

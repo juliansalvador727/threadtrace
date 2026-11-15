@@ -25,7 +25,7 @@ Record new decisions the same way, in an "Mn decisions" subsection.
 - Only extension.ts, install/hookInstaller.ts, git/gitService.ts, ui/annotation.ts,
   ui/threadPanel.ts, ui/heatmap.ts, ui/statusBar.ts and ui/threadsView.ts import
   vscode. Keep everything else (store, resolver, git parsing, backfill, hoverCard.ts,
-  threadHtml.ts, fileSummary.ts, agentTrace.ts, captureConfig.ts) free of it so it
+  threadHtml.ts, fileSummary.ts, agentTrace.ts, captureConfig.ts, hookScript.ts) free of it so it
   can be unit tested.
 - tt-capture must always exit 0, never write to stdout, and never block the agent.
 - Never edit ~/.claude/settings.json without a confirmation step.

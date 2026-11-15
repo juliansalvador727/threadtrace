@@ -6,7 +6,7 @@ import { traceHome } from './capture/capture';
 import { findRepo } from './capture/gitDir';
 import { GitService } from './git/gitService';
 import { syncCaptureConfig } from './install/captureConfig';
-import { registerHookCommands } from './install/hookInstaller';
+import { refreshHookScript, registerHookCommands } from './install/hookInstaller';
 import { registerAnnotation, type ThreadTraceApi } from './ui/annotation';
 import { statusText } from './ui/fileSummary';
 import { Heatmap } from './ui/heatmap';
@@ -149,6 +149,7 @@ function syncCapture(removeUnset: boolean): void {
 // the Agent Threads view, the Agent Trace export and the capture settings.
 // Records are loaded on the first resolve, not here.
 export function activate(context: vscode.ExtensionContext): ThreadTraceApi {
+  refreshHookScript(context);
   registerHookCommands(context);
   const git = new GitService();
   const panels = new ThreadPanels(context);

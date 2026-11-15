@@ -21,6 +21,9 @@ const AGENT_LINES = ['export function total(price: number, quantity: number) {',
  */
 function seedWorkspace(): string {
   const base = mkdtempSync(path.join(os.tmpdir(), 'tt-integration-'));
+  // A hook script left by an older version: activation should replace it with this build's.
+  mkdirSync(path.join(base, 'home', 'bin'), { recursive: true });
+  writeFileSync(path.join(base, 'home', 'bin', 'tt-capture.js'), '// tt-capture from an older version\n');
   const root = path.join(base, 'repo');
   mkdirSync(root);
   const env = {

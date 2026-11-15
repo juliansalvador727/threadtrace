@@ -4,7 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { traceHome } from '../capture/capture';
 import { formatSettings, hasHooks, mergeHooks, parseSettings, removeHooks } from './hookConfig';
+import { copyScript, findExecutable, installedScriptPath, refreshInstalledScript } from './hookScript';
 
 const DIFF_SCHEME = 'thread-trace-settings';
 
@@ -29,8 +31,29 @@ class SettingsPreview implements vscode.TextDocumentContentProvider {
   }
 }
 
-function installedScriptPath(): string {
-  return path.join(os.homedir(), '.thread-trace', 'bin', 'tt-capture.js');
+function bundledScriptPath(context: vscode.ExtensionContext): string {
+  return path.join(context.extensionPath, 'dist', 'tt-capture.js');
+}
+
+/**
+ * The hook command is `node <script>`. Claude Code's native installer doesn't
+ * bring Node, so without it every hook run fails and nothing is recorded.
+ * Returns true to go on with the install.
+ */
+async function nodeAvailableOrAccepted(): Promise<boolean> {
+  if (findExecutable('node', process.env)) return true;
+  const choice = await vscode.window.showWarningMessage(
+    'Thread Trace: Node.js was not found on your PATH.',
+    {
+      modal: true,
+      detail:
+        'Claude Code runs the hook with `node`. Without Node.js 18 or later on the PATH Claude Code uses, ' +
+        'the hook fails and no edits are recorded (your sessions are not affected). ' +
+        'If Claude Code sees a different PATH than VS Code, it may still work.',
+    },
+    'Install Anyway',
+  );
+  return choice === 'Install Anyway';
 }
 
 async function pickTarget(action: string): Promise<Target | undefined> {
@@ -91,6 +114,7 @@ async function change(context: vscode.ExtensionContext, preview: SettingsPreview
   }
   const target = await pickTarget(action);
   if (!target) return;
+  if (install && !(await nodeAvailableOrAccepted())) return;
 
   const currentText = readIfExists(target.file);
   let settings: Record<string, unknown>;
@@ -107,14 +131,11 @@ async function change(context: vscode.ExtensionContext, preview: SettingsPreview
     return;
   }
 
-  const script = installedScriptPath();
+  const script = installedScriptPath(traceHome(process.env));
   const proposedText = formatSettings(install ? mergeHooks(settings, script) : removeHooks(settings));
   if (!(await confirm(preview, target.file, currentText ?? '', proposedText, action))) return;
 
-  if (install) {
-    fs.mkdirSync(path.dirname(script), { recursive: true });
-    fs.copyFileSync(path.join(context.extensionPath, 'dist', 'tt-capture.js'), script);
-  }
+  if (install) copyScript(bundledScriptPath(context), script);
   fs.mkdirSync(path.dirname(target.file), { recursive: true });
   fs.writeFileSync(target.file, proposedText);
   void vscode.window.showInformationMessage(
@@ -122,6 +143,19 @@ async function change(context: vscode.ExtensionContext, preview: SettingsPreview
       ? `Thread Trace: hooks installed in ${target.file}. New Claude Code sessions will record edits.`
       : `Thread Trace: hooks removed from ${target.file}.`,
   );
+}
+
+/**
+ * Replaces an installed hook script that differs from this version's, so an
+ * extension update reaches the hook. Never creates one and never touches the
+ * settings files. Failures are logged, not shown: the old script still works.
+ */
+export function refreshHookScript(context: vscode.ExtensionContext): void {
+  try {
+    refreshInstalledScript(bundledScriptPath(context), installedScriptPath(traceHome(process.env)));
+  } catch (error) {
+    console.error(`Thread Trace: could not update the hook script: ${(error as Error).message}`);
+  }
 }
 
 export function registerHookCommands(context: vscode.ExtensionContext): void {

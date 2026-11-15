@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild';
+import { rmSync } from 'node:fs';
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -75,5 +76,7 @@ if (integration) {
   const contexts = await Promise.all([esbuild.context(extension), esbuild.context(capture)]);
   await Promise.all(contexts.map((ctx) => ctx.watch()));
 } else {
+  // Start from an empty dist/, so source maps from earlier dev builds don't end up in the package.
+  rmSync('dist', { recursive: true, force: true });
   await Promise.all([esbuild.build(extension), esbuild.build(capture)]);
 }
