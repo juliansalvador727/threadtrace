@@ -58,6 +58,19 @@
       {
         "command": "threadTrace.toggleAnnotation",
         "title": "Thread Trace: Toggle Line Annotation"
+      },
+      {
+        "command": "threadTrace.toggleHeatmap",
+        "title": "Thread Trace: Toggle Agent Heatmap"
+      },
+      {
+        "command": "threadTrace.showLegend",
+        "title": "Thread Trace: Show Agent Summary for File"
+      },
+      {
+        "command": "threadTrace.exportAgentTrace",
+        "title": "Thread Trace: Export Agent Trace",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "configuration": {
@@ -85,9 +98,61 @@
           "type": "boolean",
           "default": false,
           "description": "Follow lines moved or copied from other files (git blame -M -C). Slower on large files."
+        },
+        "threadTrace.heatmap.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a colored bar on each agent-written line, one color per model. Dashed: edited by hand since. Dotted: known only from the commit message."
+        },
+        "threadTrace.capture.prompt": {
+          "type": "string",
+          "enum": [
+            "full",
+            "firstLine",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Store the whole prompt, after redaction.",
+            "Store only the first line of the prompt.",
+            "Don't store prompts."
+          ],
+          "default": "full",
+          "scope": "application",
+          "description": "How much of each prompt the capture hook stores. Applies to prompts captured from now on, in every project. Written to ~/.thread-trace/config.json, where the hook reads it."
+        },
+        "threadTrace.capture.redact": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "description": "Extra regular expressions to redact from prompts before they are stored, on top of the built-in patterns for keys, tokens and passwords. Written to ~/.thread-trace/config.json, where the hook reads it."
         }
       }
-    }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "threadTrace.threads",
+          "name": "Agent Threads",
+          "contextualTitle": "Thread Trace",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "threadTrace.threads",
+        "contents": "No agent threads are recorded for this file.\n[Backfill from Transcripts](command:threadTrace.backfill)\n[Install Agent Hooks](command:threadTrace.installHooks)",
+        "when": "isWorkspaceTrusted"
+      },
+      {
+        "view": "threadTrace.threads",
+        "contents": "Agent threads are not shown in untrusted workspaces.",
+        "when": "!isWorkspaceTrusted"
+      }
+    ]
   },
   "scripts": {
     "watch": "node esbuild.mjs --watch",

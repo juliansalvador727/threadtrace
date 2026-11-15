@@ -5,7 +5,7 @@ Full spec: docs/SPEC.md. Read the relevant section before starting a milestone.
 
 The last sections of docs/SPEC.md ("Capture: verified differences" and its
 subsections "Hook payloads observed", "M1 decisions", "M2 decisions",
-"M3 decisions", "M4 decisions") are newer than the rest and override it where
+"M3 decisions", "M4 decisions", "M5 decisions") are newer than the rest and override it where
 they disagree. Read them before touching capture, backfill, the schema, the
 store, the resolver or the UI.
 Record new decisions the same way, in an "Mn decisions" subsection.
@@ -22,9 +22,11 @@ Record new decisions the same way, in an "Mn decisions" subsection.
 - src/capture/ must never import vscode; it's bundled standalone for the hook.
   The same goes for what it imports: src/store/hash.ts, src/store/schema.ts,
   src/adapters/types.ts, src/adapters/claudeCode.ts.
-- Only extension.ts, install/hookInstaller.ts, git/gitService.ts, ui/annotation.ts
-  and ui/threadPanel.ts import vscode. Keep everything else (store, resolver, git
-  parsing, backfill, hoverCard.ts, threadHtml.ts) free of it so it can be unit tested.
+- Only extension.ts, install/hookInstaller.ts, git/gitService.ts, ui/annotation.ts,
+  ui/threadPanel.ts, ui/heatmap.ts, ui/statusBar.ts and ui/threadsView.ts import
+  vscode. Keep everything else (store, resolver, git parsing, backfill, hoverCard.ts,
+  threadHtml.ts, fileSummary.ts, agentTrace.ts, captureConfig.ts) free of it so it
+  can be unit tested.
 - tt-capture must always exit 0, never write to stdout, and never block the agent.
 - Never edit ~/.claude/settings.json without a confirmation step.
 - Every milestone ships with tests from the spec's acceptance list.
@@ -41,6 +43,12 @@ Record new decisions the same way, in an "Mn decisions" subsection.
 - edits.jsonl is append-only. Derived values (like the corrected model) are
   computed at resolve time, never written back. Backfill only appends, and
   skips edits whose tool_use_id is already recorded.
+- Tree items, quick picks and the status bar get record content as plain strings,
+  never MarkdownString.
+- The Agent Trace export never includes prompts, transcript paths or cwd, describes
+  HEAD (not the working tree), and writes only after the preview is confirmed.
+- threadTrace.capture.* stay `scope: "application"`: a workspace must not be able
+  to change what the hook captures.
 - Commit messages are untrusted too. A session link from a trailer is opened
   only when trailers.ts accepted it (https://claude.ai/ only), and hover links
   carry the commit sha, never the URL.
@@ -57,7 +65,14 @@ Record new decisions the same way, in an "Mn decisions" subsection.
   from trailers, the `--follow` rename map, `blame.detectMoves`,
   `hover.mode: "anywhere"`. The squash-merge window turned out not to be needed.
   The backfill command's progress notification has not been tried by hand yet.
-- M5 polish: next. Heatmap, Agent Threads view, status bar summary, Agent Trace
-  export, settings UI (writes ~/.thread-trace/config.json).
+- M5 polish: done, except publishing. Heatmap, status bar summary and legend,
+  Agent Threads view, Agent Trace export, capture settings synced to
+  ~/.thread-trace/config.json. Not tried by hand yet: how the heatmap bars and the
+  legend's color swatches look, the Agent Threads view in the Explorer, and the
+  export's preview and confirmation dialog.
+- Publishing (Marketplace, Open VSX): not started. Needs a README, LICENSE and icon,
+  `private` removed, and the three by-hand checks above.
+- v1.1 (spec, "Phasing"): next. Intent + trigger, rationale snippet, verified badge,
+  Continue this thread.
 
-## Current milestone: M5
+## Current milestone: v1.1

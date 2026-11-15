@@ -635,3 +635,50 @@ Decided on Nov 15, 2026. Where these differ from "Transcript backfill", "Commit 
 - **`threadTrace.blame.detectMoves`** adds `-M -C` to blame. git recognizes a move only when the moved text is long enough and only within the lines it was asked to blame, so with the setting on the resolver blames the 20 lines either side and keeps the one it wants.
 - **`threadTrace.hover.mode: "anywhere"`** registers a `HoverProvider` for `file` documents. It adds one line (the annotation text and an Open thread or Open on claude.ai link), built in `hoverCard.ts`. Links there can name edits and commits of the hovered line as well as the cursor line.
 - **Extra files** beyond the layout: `src/backfill/backfill.ts` (no `vscode`), `test/unit/backfill.test.ts`, `test/unit/trailers.test.ts`.
+
+### M5 decisions
+
+Decided on Nov 15, 2026. Where these differ from "Other surfaces", "Commands", "Settings", "Interop and stability" and "Privacy", these are what the code does.
+
+**Whole-file resolution**
+
+- **`Resolver.resolveFile`** resolves every line with one blame and gives each line the answer `resolve` gives it. The heatmap, the status bar and the export all use it. Trailers are read once per commit, eight commits at a time.
+- **Fuzzy matching checks the records first.** A file with no edit records never has its old versions read from git, and an old line is compared only after a record for it was found. Without this a whole-file pass ran one `git show` per commit and a Levenshtein comparison per neighbor. A test holds 5,000 lines with 20k records to under two seconds.
+- **Files are scanned on open, on save and when the records change**, not on every keystroke, as the spec says. Decorations move with the text in between. Files over 10,000 lines or 5 MB are not scanned.
+- **Every visible editor is scanned**, whether or not the heatmap is on, because the status bar needs the same result.
+
+**Heatmap and status bar**
+
+- **The bar is a 3px left border on the whole line**, not a gutter icon, so it needs no image files and doesn't cover breakpoints. The same color marks the overview ruler.
+- **One color per model name as shown** (`Claude Opus 5.5`), from a six-color palette with light and dark values, handed out in the order models are first seen in the window. A line known only from a commit trailer takes the co-author's name, so it shares a color with recorded lines of that model.
+- **Border style is the confidence:** solid for `exact` and `likely`, dashed for `modified`, dotted for `commit`.
+- **`✦ 62% agent` counts non-blank lines.** `modified` and `commit` lines count as agent lines. The item is hidden for a file with no agent lines. A share under 0.5% shows as `<1%`.
+- **The legend is a quick pick** (`threadTrace.showLegend`): one row per model with its line count and color swatch, a row for the rest of the file, and an entry that toggles the heatmap. The swatch icons have not been checked by eye.
+
+**Agent Threads view**
+
+- **It lists every thread with an edit record for the file**, including edits whose lines are gone, and records under the file's former names. A thread opens to its edits; clicking either opens the panel at that edit.
+- **A thread is named by the first line of its first stored prompt**, else `Session <first 8 characters>`. Labels, descriptions and tooltips are plain strings, never Markdown.
+- **The view keeps showing the last file editor's threads** when focus moves to the thread panel.
+- **`threadTrace.openThreadFromView`** takes an edit id and opens only an edit the view is currently showing. It is not in the palette.
+- **Commit-only files have no rows.** A file known only from trailers has no edit records.
+
+**Agent Trace export**
+
+- **Checked against agent-trace.dev, version 0.1.0** (Nov 15, 2026). The spec does not define where records are stored; `.agent-trace/traces.jsonl` is this extension's choice. It does not say what `content_hash` hashes, so ranges carry none. `end_line` is written as inclusive.
+- **The export describes HEAD, not the working tree**, because a record's ranges refer to its `vcs.revision`. Each file is read with `git show HEAD:<file>` and resolved against that text. Uncommitted agent lines are not exported.
+- **One record per conversation:** a recorded session, or what a commit's trailers name. `timestamp` is the newest edit (or commit) among its lines; `tool` is the turn's agent name and version and is left out for trailer-only records.
+- **Contributor:** `ai` for `exact`, `likely` and `commit`; `mixed` for `modified`. `model_id` is `anthropic/<model>` for `claude-*` ids and absent for trailer-only lines. A conversation's `url` is the turn's `thread_url`, else the commit's session trailer.
+- **What leaves the machine:** paths, line ranges, model ids, session ids and session links. Prompts, transcript paths and `cwd` are never exported.
+- **Only files with edit records are resolved.** A file known only from trailers, or renamed since its records were written, is left out; the confirmation says how many were skipped.
+- **Preview, then confirm.** The command opens the records as an untitled JSON document, then asks in a modal dialog. Nothing is written before "Write".
+- **Re-running replaces, never duplicates.** Records marked with this extension's metadata key (`juliansalvador727.thread-trace`) for the same revision are replaced. Other tools' lines and other revisions' records are kept as they are. The file is written beside the target and renamed.
+
+**Settings**
+
+- **"Settings UI" is VS Code's own settings editor.** `threadTrace.capture.prompt` and `threadTrace.capture.redact` are contributed with `scope: "application"`, so only user settings can set them; a workspace can't change what is captured.
+- **Sync to `~/.thread-trace/config.json`** (`THREAD_TRACE_HOME` is honored) happens on activation and when either setting changes. A setting the user set replaces the file's value. On activation an unset setting leaves the file alone, so a hand-edited file survives. After a change, an unset setting's key is removed and the hook's default applies. Unknown keys are kept. No file is created while nothing is set, and a file that isn't a JSON object is left alone until there is something to write.
+- **Invalid redaction patterns** are written as given (the hook skips them) and reported in a warning.
+- **`threadTrace.heatmap.enabled`** and `threadTrace.toggleHeatmap` are window-scoped like the annotation's.
+- **Not done:** publishing to the Marketplace and Open VSX. The package is still `private`, with no README, LICENSE or icon.
+- **Extra files** beyond the layout: `src/ui/fileSummary.ts` (summary, legend rows, color slots and thread rows; no `vscode`), `src/install/captureConfig.ts` (no `vscode`), `test/unit/m5.test.ts`, `test/integration/suite/m5.test.ts`.

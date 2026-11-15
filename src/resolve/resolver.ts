@@ -34,6 +34,8 @@ const REGION = 20;
 const MAX_BLAME_CACHE = 256;
 const MAX_FILE_CACHE = 32;
 const MAX_TRAILER_CACHE = 1024;
+/** How many commits' trailers are read at once when a whole file is resolved. */
+const TRAILER_BATCH = 8;
 
 export interface ResolverOptions {
   /** `threadTrace.blame.detectMoves`: blame with `-M -C`. Read on every blame, so a settings change applies at once. */
@@ -98,6 +100,7 @@ export class Resolver {
   private readonly renameCache = new Map<string, Promise<string[]>>();
   /** The blame each attribution came from, for fetching its commit chain later. */
   private readonly origins = new WeakMap<Attribution, BlameLine>();
+  private readonly hashMemo = new WeakMap<string[], (string | undefined)[]>();
 
   constructor(
     private readonly git: Git,
@@ -114,10 +117,57 @@ export class Resolver {
     // The empty line after a final newline isn't a line to git.
     if (doc.line < 1 || doc.line > lines.length) return { line: doc.line, confidence: 'none', history: [] };
     const text = lines[doc.line - 1];
-    if (isWeak(text)) return this.withTrailers(await this.resolveWeak(doc, lines));
+    if (isWeak(text)) {
+      const from = Math.max(1, doc.line - REGION);
+      const to = Math.min(lines.length, doc.line + REGION);
+      const blamed = await this.blame(doc, from, to, lines.length);
+      return this.withTrailers(await this.resolveWeak(doc, lines, doc.line, (n) => blamed.find((entry) => entry.line === n)));
+    }
     const [blame] = await this.blame(doc, doc.line, doc.line, lines.length);
     if (!blame) throw new Error(`no blame for line ${doc.line}`);
     return this.withTrailers(await this.resolveStrong(doc, lines, doc.line, blame));
+  }
+
+  /**
+   * Resolves every line of a file with one blame, for the heatmap, the status
+   * bar summary and the export. Entry `i` is line `i + 1`. Each line gets the
+   * same answer `resolve` would give it.
+   */
+  async resolveFile(doc: Omit<DocSnapshot, 'line'>): Promise<Attribution[]> {
+    this.store.refresh();
+    const lines = splitLines(doc.text);
+    if (lines.length === 0) return [];
+    const blamed = await this.blame(doc, 1, lines.length, lines.length);
+    const byLine = new Map(blamed.map((entry) => [entry.line, entry]));
+    const at = (n: number) => byLine.get(n);
+    const found: Attribution[] = [];
+    for (let line = 1; line <= lines.length; line++) {
+      const blame = at(line);
+      if (!blame) throw new Error(`no blame for line ${line}`);
+      found.push(isWeak(lines[line - 1]) ? await this.resolveWeak(doc, lines, line, at) : await this.resolveStrong(doc, lines, line, blame));
+    }
+    // One `git show` per commit, a few at a time, instead of one after another.
+    const shas = [...new Set(found.map((entry) => entry.commit?.sha).filter((sha) => sha !== undefined))];
+    for (let i = 0; i < shas.length; i += TRAILER_BATCH) {
+      await Promise.all(shas.slice(i, i + TRAILER_BATCH).map((sha) => this.trailers(sha)));
+    }
+    for (const entry of found) await this.withTrailers(entry);
+    return found;
+  }
+
+  /** A file's former paths, for callers that list its records. */
+  pathsOf(file: string): Promise<string[]> {
+    return this.formerPaths(file).then((former) => [...new Set([file, ...former])]);
+  }
+
+  private trailers(sha: string): Promise<Trailers> {
+    let pending = this.trailerCache.get(sha);
+    if (!pending) {
+      if (this.trailerCache.size >= MAX_TRAILER_CACHE) this.trailerCache.clear();
+      pending = commitTrailers(this.git, sha);
+      this.trailerCache.set(sha, pending);
+    }
+    return pending;
   }
 
   /**
@@ -128,14 +178,8 @@ export class Resolver {
   private async withTrailers(attribution: Attribution): Promise<Attribution> {
     const { commit } = attribution;
     if (!commit) return attribution;
-    let pending = this.trailerCache.get(commit.sha);
-    if (!pending) {
-      if (this.trailerCache.size >= MAX_TRAILER_CACHE) this.trailerCache.clear();
-      pending = commitTrailers(this.git, commit.sha);
-      this.trailerCache.set(commit.sha, pending);
-    }
     // Filled in place: the attribution was built for this call, and `origins` is keyed by it.
-    commit.trailers = await pending;
+    commit.trailers = await this.trailers(commit.sha);
     if (attribution.confidence === 'none' && hasAgentTrailer(commit.trailers)) attribution.confidence = 'commit';
     return attribution;
   }
@@ -166,7 +210,7 @@ export class Resolver {
     return expanded;
   }
 
-  private async resolveStrong(doc: DocSnapshot, lines: string[], line: number, blame: BlameLine): Promise<Attribution> {
+  private async resolveStrong(doc: Omit<DocSnapshot, 'line'>, lines: string[], line: number, blame: BlameLine): Promise<Attribution> {
     const text = lines[line - 1];
     const hash = strictHash(text);
     let paths = [...new Set([doc.file, blame.origPath])];
@@ -201,12 +245,14 @@ export class Resolver {
    * with the same commit and the edit's hunk holds the two lines the same
    * distance apart as they are now. A `}` typed by a human fails that.
    */
-  private async resolveWeak(doc: DocSnapshot, lines: string[]): Promise<Attribution> {
-    const line = doc.line;
+  private async resolveWeak(
+    doc: Omit<DocSnapshot, 'line'>,
+    lines: string[],
+    line: number,
+    at: (line: number) => BlameLine | undefined,
+  ): Promise<Attribution> {
     const from = Math.max(1, line - REGION);
     const to = Math.min(lines.length, line + REGION);
-    const blamed = await this.blame(doc, from, to, lines.length);
-    const at = (n: number) => blamed.find((entry) => entry.line === n);
     const own = at(line);
     if (!own) throw new Error(`no blame for line ${line}`);
     const text = lines[line - 1];
@@ -258,30 +304,33 @@ export class Resolver {
    * that an agent wrote, that is gone from the buffer now, and that is close
    * enough to the current text is the original.
    */
-  private async fuzzyMatch(doc: DocSnapshot, lines: string[], line: number, blame: BlameLine, known: string[]): Promise<Match | undefined> {
+  private async fuzzyMatch(doc: Omit<DocSnapshot, 'line'>, lines: string[], line: number, blame: BlameLine, known: string[]): Promise<Match | undefined> {
     const head = this.repo ? readHead(this.repo).head : '';
     const before = blame.committed ? blame.previous : head ? { sha: head, path: doc.file } : undefined;
     if (!before) return undefined;
+    const paths = [...new Set([...known, before.path])];
+    // No agent ever wrote to this file: nothing to compare with, so don't read the old version.
+    if (!paths.some((path) => this.store.hasEdits(path))) return undefined;
     const old = await this.fileLines(before.sha, before.path);
     if (!old) return undefined;
 
     const stillPresent = new Set<string>();
     for (let n = Math.max(1, line - REGION); n <= Math.min(lines.length, line + REGION); n++) {
-      stillPresent.add(strictHash(lines[n - 1]));
+      stillPresent.add(this.hashAt(lines, n));
     }
     const text = lines[line - 1];
-    const paths = [...new Set([...known, before.path])];
     const center = blame.committed ? blame.origLine : line;
     let best: { match: Match; score: number; distance: number } | undefined;
     for (let n = Math.max(1, center - REGION); n <= Math.min(old.length, center + REGION); n++) {
       const oldText = old[n - 1];
       if (isWeak(oldText)) continue;
-      const score = similarity(text, oldText);
-      if (score < FUZZY_MIN) continue;
-      const hash = strictHash(oldText);
+      // The record lookups are cheaper than the comparison, so they go first.
+      const hash = this.hashAt(old, n);
       if (stillPresent.has(hash)) continue;
       const match = this.candidates(paths, hash, blame, 'strict');
       if (!match) continue;
+      const score = similarity(text, oldText);
+      if (score < FUZZY_MIN) continue;
       const distance = Math.abs(n - center);
       if (!best || score > best.score || (score === best.score && distance < best.distance)) {
         best = { match, score, distance };
@@ -309,6 +358,13 @@ export class Resolver {
     return attribution;
   }
 
+  /** Strict hash of line `n` (1-based) of `lines`, kept for as long as the array is, so a whole-file pass hashes each line once. */
+  private hashAt(lines: string[], n: number): string {
+    let hashes = this.hashMemo.get(lines);
+    if (!hashes) this.hashMemo.set(lines, (hashes = []));
+    return (hashes[n - 1] ??= strictHash(lines[n - 1]));
+  }
+
   /** Paths the file had before it was renamed. Cached until HEAD moves. */
   private formerPaths(file: string): Promise<string[]> {
     const key = `${this.repo ? readHead(this.repo).head : ''}:${file}`;
@@ -322,7 +378,7 @@ export class Resolver {
   }
 
   /** Blame for lines `from`..`to` of a buffer with `total` lines. */
-  private async blame(doc: DocSnapshot, from: number, to: number, total: number): Promise<BlameLine[]> {
+  private async blame(doc: Omit<DocSnapshot, 'line'>, from: number, to: number, total: number): Promise<BlameLine[]> {
     const detectMoves = this.options.detectMoves?.() ?? false;
     if (!detectMoves) return this.blameRange(doc, from, to, false);
     // git only recognizes a move when the moved text is long enough (40
@@ -335,7 +391,7 @@ export class Resolver {
     return region.filter((entry) => entry.line >= from && entry.line <= to);
   }
 
-  private blameRange(doc: DocSnapshot, from: number, to: number, detectMoves: boolean): Promise<BlameLine[]> {
+  private blameRange(doc: Omit<DocSnapshot, 'line'>, from: number, to: number, detectMoves: boolean): Promise<BlameLine[]> {
     if (doc.version === undefined) return blameLines(this.git, doc.file, from, to, doc.text, detectMoves);
     const version = `${doc.version}${detectMoves ? ' -M -C' : ''}`;
     if (version !== this.blameVersion || this.blameCache.size >= MAX_BLAME_CACHE) {

@@ -62,6 +62,8 @@ export class TraceStore {
    * most of the cost of a cold start, and a lookup only needs one file's.
    */
   private unparsed = new Map<string, string[]>();
+  /** Parsed edits by file, in the order they were recorded. */
+  private byFile = new Map<string, Edit[]>();
   private edits = 0;
   private watcher: fs.FSWatcher | undefined;
   private watchTimer: NodeJS.Timeout | undefined;
@@ -104,6 +106,7 @@ export class TraceStore {
       this.strictIndex = new Map();
       this.looseIndex = new Map();
       this.unparsed = new Map();
+      this.byFile = new Map();
       this.edits = 0;
       changed = true;
     }
@@ -133,6 +136,22 @@ export class TraceStore {
     return this.looseIndex.get(file)?.get(hash) ?? [];
   }
 
+  /** True when at least one edit to `file` is recorded. Doesn't parse anything. */
+  hasEdits(file: string): boolean {
+    return this.unparsed.has(file) || this.byFile.has(file);
+  }
+
+  /** Every edit recorded for `file`, in the order they were recorded. */
+  editsFor(file: string): Edit[] {
+    this.index(file);
+    return this.byFile.get(file) ?? [];
+  }
+
+  /** The files that have edit records. */
+  files(): string[] {
+    return [...new Set([...this.byFile.keys(), ...this.unparsed.keys()])];
+  }
+
   turn(id: string): Turn | undefined {
     return this.turns.get(id);
   }
@@ -147,9 +166,12 @@ export class TraceStore {
     const lines = this.unparsed.get(file);
     if (!lines) return;
     this.unparsed.delete(file);
+    let parsed = this.byFile.get(file);
     for (const line of lines) {
       const edit = parse<Edit>(line);
       if (!edit || edit.file !== file || !Array.isArray(edit.hunks)) continue;
+      if (!parsed) this.byFile.set(file, (parsed = []));
+      parsed.push(edit);
       const strict = new Set<string>();
       const loose = new Set<string>();
       for (const hunk of edit.hunks) {

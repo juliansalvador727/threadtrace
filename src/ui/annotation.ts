@@ -23,8 +23,26 @@ export interface LineResult {
   card: Card;
 }
 
+/** A file's summary as the status bar and heatmap show it. */
+export interface FileOverview {
+  /** The status bar text. */
+  text: string;
+  percent: number;
+  groups: { label: string; lines: number; modified: number; commit: number }[];
+  /** Lines the heatmap colors. */
+  colored: number;
+}
+
 /** What `activate()` returns, for the integration tests. */
 export interface ThreadTraceApi {
+  /** M5: the whole-file summary behind the status bar item and the heatmap. */
+  fileOverview(uri: vscode.Uri): Promise<FileOverview | undefined>;
+  /** M5: the rows of the Agent Threads view for a file. */
+  fileThreads(uri: vscode.Uri): Promise<{ label: string; description: string; edits: string[] }[]>;
+  /** M5: opens the thread panel from the Agent Threads view's first thread. */
+  openFirstThread(uri: vscode.Uri): Promise<{ title: string; revealed: Revealed } | undefined>;
+  /** M5: the Agent Trace records the export would write, without writing them. */
+  agentTrace(): Promise<{ revision: string; records: unknown[]; lines: number } | undefined>;
   resolveLine(uri: vscode.Uri, line: number): Promise<{ text: string; markdown: string; confidence: string } | undefined>;
   /** Opens the thread panel for a line and waits for the webview to report what it scrolled to. */
   openThread(uri: vscode.Uri, line: number): Promise<{ title: string; html: string; revealed: Revealed } | undefined>;
@@ -254,7 +272,11 @@ const SHA = /^[0-9a-f]{7,64}$/;
 const SESSION_URL = /^https:\/\/claude\.ai\//;
 
 /** Creates the annotation and registers its commands. */
-export function registerAnnotation(context: vscode.ExtensionContext, git: GitService, panels: ThreadPanels): ThreadTraceApi {
+export function registerAnnotation(
+  context: vscode.ExtensionContext,
+  git: GitService,
+  panels: ThreadPanels,
+): Pick<ThreadTraceApi, 'resolveLine' | 'openThread'> {
   const annotation = new LineAnnotation(git);
 
   /** The attribution for a command: the one on screen, or the cursor line resolved now. */

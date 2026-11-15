@@ -2,7 +2,7 @@
 // vscode.git extension and keeps one store and resolver per repo.
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { findRepo, repoRelative } from '../capture/gitDir';
+import { findRepo, repoRelative, type RepoInfo } from '../capture/gitDir';
 import { Resolver } from '../resolve/resolver';
 import { TraceStore } from '../store/traceStore';
 import { Git } from './exec';
@@ -19,6 +19,7 @@ interface GitExtension {
 export interface RepoServices {
   /** Working tree root. */
   root: string;
+  git: Git;
   store: TraceStore;
   resolver: Resolver;
 }
@@ -36,6 +37,16 @@ export class GitService implements vscode.Disposable {
     if (!info) return undefined;
     const file = repoRelative(info, fsPath);
     if (!file) return undefined;
+    return { repo: await this.services(info), file };
+  }
+
+  /** The repo services for the repo that contains a folder. Undefined outside a git repo. */
+  async forDir(dir: string): Promise<RepoServices | undefined> {
+    const info = findRepo(dir);
+    return info && this.services(info);
+  }
+
+  private async services(info: RepoInfo): Promise<RepoServices> {
     let repo = this.repos.get(info.root);
     if (!repo) {
       const api = await this.gitApi();
@@ -45,12 +56,13 @@ export class GitService implements vscode.Disposable {
         const store = new TraceStore(path.join(info.commonDir, 'thread-trace'));
         store.onDidChange(() => this.recordsChanged.fire());
         const detectMoves = () => vscode.workspace.getConfiguration('threadTrace').get<boolean>('blame.detectMoves', false);
-        const resolver = new Resolver(new Git(info.root, api?.git.path || 'git'), store, undefined, { detectMoves });
-        repo = { root: info.root, store, resolver };
+        const git = new Git(info.root, api?.git.path || 'git');
+        const resolver = new Resolver(git, store, undefined, { detectMoves });
+        repo = { root: info.root, git, store, resolver };
         this.repos.set(info.root, repo);
       }
     }
-    return { repo, file };
+    return repo;
   }
 
   /** A URI for the file as it is at `ref`, served by the git extension. */
