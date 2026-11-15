@@ -116,8 +116,11 @@ export async function blameLines(
   from: number,
   to: number,
   contents: string,
+  /** Also follow lines moved or copied from other files (`-M -C`). Slower. */
+  detectMoves = false,
 ): Promise<BlameLine[]> {
-  const result = await git.run(['blame', '--porcelain', '-L', `${from},${to}`, '--contents', '-', '--', file], contents);
+  const moves = detectMoves ? ['-M', '-C'] : [];
+  const result = await git.run(['blame', '--porcelain', ...moves, '-L', `${from},${to}`, '--contents', '-', '--', file], contents);
   if (result.code === 0) return parsePorcelain(result.stdout);
   if (NOTHING_COMMITTED.test(result.stderr)) return uncommitted(file, from, to);
   throw new Error(`git blame failed (${result.code}): ${result.stderr.trim()}`);

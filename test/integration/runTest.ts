@@ -6,12 +6,17 @@ import { runTests } from '@vscode/test-electron';
 import { looseHash, strictHash } from '../../src/store/hash';
 import type { Edit, Turn } from '../../src/store/schema';
 
+const BACKFILL_LINES = ['export function discount(price: number, percent: number) {', '  return price - (price * percent) / 100;', '}'];
+const CLOUD_LINES = ['export function shipping(weight: number) {', '  return weight > 10 ? 15 : 5;', '}'];
 const AGENT_LINES = ['export function total(price: number, quantity: number) {', '  return price * quantity;', '}'];
 
 /**
  * A temp git repo for the tests to open as their workspace: one file whose
  * lines 2-4 were written by an agent (recorded and committed) and whose last
  * line was typed by hand. The session's transcript sits beside the repo.
+ * For M4 it also has `backfilled.ts`, written by a session that left only a
+ * transcript under `claude/projects/` (no records), and `cloud.ts`, whose
+ * commit carries agent trailers and nothing else.
  * Returns the temp dir; the repo is its `repo` folder.
  */
 function seedWorkspace(): string {
@@ -99,8 +104,47 @@ function seedWorkspace(): string {
   writeFileSync(path.join(records, 'turns.jsonl'), JSON.stringify(turn) + '\n');
   writeFileSync(path.join(records, 'edits.jsonl'), JSON.stringify(edit) + '\n');
 
+  // A session from before the hook was installed: only Claude Code's own transcript exists.
+  const backfilled = path.join(root, 'backfilled.ts');
+  const content = BACKFILL_LINES.join('\n') + '\n';
+  writeFileSync(backfilled, content);
+  const old = { sessionId: 'backfill-session', version: '2.1.325', gitBranch: 'main', timestamp: ts, cwd: root, promptId: 'backfill-prompt' };
+  const project = path.join(base, 'claude', 'projects', root.replace(/[^A-Za-z0-9]/g, '-'));
+  mkdirSync(project, { recursive: true });
+  writeFileSync(
+    path.join(project, 'backfill-session.jsonl'),
+    [
+      { ...old, type: 'user', uuid: 'b1', promptSource: 'typed', origin: { kind: 'human' }, message: { role: 'user', content: 'Add a discount helper' } },
+      {
+        ...old,
+        type: 'assistant',
+        uuid: 'b2',
+        message: { model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', id: 'toolu_backfill_write', name: 'Write', input: { file_path: backfilled, content } }] },
+      },
+      {
+        ...old,
+        type: 'user',
+        uuid: 'b3',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_backfill_write', content: 'ok' }] },
+        toolUseResult: { type: 'create', filePath: backfilled, content, structuredPatch: [], originalFile: null },
+      },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join('\n') + '\n',
+  );
+
   git('add', '-A');
   git('commit', '-q', '-m', 'Add total helper');
+
+  // A commit from a cloud session: trailers in the message, no records here.
+  writeFileSync(path.join(root, 'cloud.ts'), CLOUD_LINES.join('\n') + '\n');
+  git('add', '-A');
+  git(
+    'commit',
+    '-q',
+    '-m',
+    'Add shipping helper\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_integration',
+  );
   return base;
 }
 
@@ -118,7 +162,12 @@ async function main(): Promise<void> {
       extensionTestsPath,
       // Trust the temp workspace: the read side is off in untrusted ones.
       launchArgs: [workspace, '--disable-workspace-trust'],
-      extensionTestsEnv: { THREAD_TRACE_TEST_WORKSPACE: workspace },
+      extensionTestsEnv: {
+        THREAD_TRACE_TEST_WORKSPACE: workspace,
+        // Backfill reads transcripts from here, never from the real ~/.claude or ~/.thread-trace.
+        CLAUDE_CONFIG_DIR: path.join(base, 'claude'),
+        THREAD_TRACE_HOME: path.join(base, 'home'),
+      },
     });
   } finally {
     rmSync(base, { recursive: true, force: true });

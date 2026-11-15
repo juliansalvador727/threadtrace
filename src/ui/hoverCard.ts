@@ -12,6 +12,7 @@ export const HOVER_COMMANDS = [
   'threadTrace.showThreadForLine',
   'threadTrace.copyPrompt',
   'threadTrace.openOnWeb',
+  'threadTrace.openCommitSession',
   'threadTrace.openCommitDiff',
   'threadTrace.copySha',
   'threadTrace.hoverFilter',
@@ -100,12 +101,31 @@ export function annotationText(attribution: Attribution, now: number): string {
     return `✦ ${who} · ${relativeTime(Date.parse(edit.ts), now)}${suffix}`;
   }
   if (!commit) return `Not committed yet${suffix}`;
+  // No record, but the commit message names an agent.
+  if (confidence === 'commit') return `✦ ${commit.trailers.coAuthor ?? 'Claude'} · ${relativeTime(commit.time * 1000, now)}${suffix}`;
   return `${commit.author}, ${relativeTime(commit.time * 1000, now)}${suffix}`;
+}
+
+/**
+ * One line for `threadTrace.hover.mode: "anywhere"`, added to the editor's
+ * normal hover: the annotation text, and the thread link when there is one.
+ */
+export function compactLine(attribution: Attribution, now: number): Card {
+  const parts = [escapeText(annotationText(attribution, now))];
+  const { edit, commit } = attribution;
+  if (edit) parts.push(link('Open thread', 'threadTrace.showThreadForLine', [edit.id], 'Open the conversation at this edit'));
+  else if (commit?.trailers.session) parts.push(sessionLink(commit));
+  return { markdown: parts.join(' · '), enabledCommands: [...HOVER_COMMANDS] };
+}
+
+/** The link carries the sha, not the URL: the command reads the URL from the commit it resolved itself. */
+function sessionLink(commit: CommitInfo): string {
+  return link('Open on claude.ai', 'threadTrace.openCommitSession', [commit.sha], 'Open the session named in the commit message');
 }
 
 type Entry =
   | { kind: 'thread'; time: number; edit: Edit; turn?: Turn; badge?: Confidence }
-  | { kind: 'commit'; time: number; commit: CommitInfo }
+  | { kind: 'commit'; time: number; commit: CommitInfo; badge?: Confidence }
   | { kind: 'uncommitted'; time: number };
 
 const PROMPT_LINES = 2;
@@ -131,6 +151,7 @@ function badge(confidence: Confidence): string {
   if (confidence === 'exact') return '$(check) exact';
   if (confidence === 'likely') return '**$(question) likely**';
   if (confidence === 'modified') return '**$(edit) modified**';
+  if (confidence === 'commit') return '**$(git-commit) commit**';
   return confidence;
 }
 
@@ -155,15 +176,30 @@ function threadEntry(entry: Extract<Entry, { kind: 'thread' }>, now: number): st
   return parts.join('\n\n');
 }
 
-function commitEntry(commit: CommitInfo, file: string | undefined, now: number): string {
+/** What the commit message says about an agent, or undefined when it says nothing. */
+function trailerLine(commit: CommitInfo, confidence: Confidence | undefined): string | undefined {
+  const { coAuthor, session } = commit.trailers;
+  if (!coAuthor && !session) return undefined;
+  const who = coAuthor ? `Co\\-authored by **${escapeText(coAuthor)}**` : 'Made in a Claude session';
+  // At `commit` confidence the trailer is all there is; say so.
+  const note = confidence === 'commit' ? ` · ${badge('commit')} · *from the commit message; no prompt or line record on this machine*` : '';
+  return `$(sparkle) ${who}${note}  `;
+}
+
+function commitEntry(entry: Extract<Entry, { kind: 'commit' }>, file: string | undefined, now: number): string {
+  const { commit } = entry;
   const short = commit.sha.slice(0, 7);
   const actions = [link('Copy SHA', 'threadTrace.copySha', [commit.sha], 'Copy the commit hash')];
   if (file) actions.unshift(link('Diff', 'threadTrace.openCommitDiff', [commit.sha, file], 'Show what this commit changed in the file'));
-  return [
+  if (commit.trailers.session) actions.push(sessionLink(commit));
+  const lines = [
     `$(git-commit) **${escapeText(commit.summary || '(no message)')}**  `,
     `${escapeText(commit.author)} · ${relativeTime(commit.time * 1000, now)} · \`${short}\`  `,
-    actions.join(' · '),
-  ].join('\n');
+  ];
+  const agent = trailerLine(commit, entry.badge);
+  if (agent) lines.push(agent);
+  lines.push(actions.join(' · '));
+  return lines.join('\n');
 }
 
 export interface CardOptions {
@@ -179,7 +215,9 @@ export function renderCard(attribution: Attribution, options: CardOptions): Card
   const { edit, turn, commit, confidence } = attribution;
 
   const thread: Entry | undefined = edit ? { kind: 'thread', time: Date.parse(edit.ts), edit, turn, badge: confidence } : undefined;
-  const landed: Entry = commit ? { kind: 'commit', time: commit.time * 1000, commit } : { kind: 'uncommitted', time: now };
+  const landed: Entry = commit
+    ? { kind: 'commit', time: commit.time * 1000, commit, badge: confidence === 'commit' ? confidence : undefined }
+    : { kind: 'uncommitted', time: now };
   // What the line is now comes first: the thread and the commit it landed in,
   // or, for a line a human changed since, their commit and then the thread.
   const primary = (confidence === 'modified' ? [landed, thread] : [thread, landed]).filter((entry) => entry !== undefined);
@@ -211,7 +249,7 @@ export function renderCard(attribution: Attribution, options: CardOptions): Card
     if (label !== group) blocks.push(`*${label}*`);
     group = label;
     if (entry.kind === 'thread') blocks.push(threadEntry(entry, now));
-    else if (entry.kind === 'commit') blocks.push(commitEntry(entry.commit, options.file, now));
+    else if (entry.kind === 'commit') blocks.push(commitEntry(entry, options.file, now));
     else blocks.push('$(circle-outline) Not committed yet');
   }
   if (shown.length === 0) blocks.push(filter === 'threads' ? '*No threads for this line.*' : '*No commits for this line.*');

@@ -2,7 +2,7 @@
 // the hook bundle imports this, so it must never import vscode.
 //
 // M1 covers hook payloads, M2 the model lookup by tool call, M3 reading a
-// transcript as a thread. Backfill from transcripts is added in M4.
+// transcript as a thread, M4 reading a transcript's prompts and edits for backfill.
 import type { PatchHunk } from '../capture/lineRanges';
 
 /** A prompt submission, normalized from an agent's hook payload. */
@@ -95,6 +95,43 @@ export interface Thread {
   started?: string;
 }
 
+/** A transcript on this machine. */
+export interface TranscriptFile {
+  path: string;
+  /** The session the file belongs to (a subagent's file belongs to its parent's session). */
+  session_id: string;
+  /** Set for a subagent's own transcript. */
+  agent_id?: string;
+  /** The session's main transcript; `path` itself unless this is a subagent's file. */
+  main: string;
+}
+
+/** A prompt as it appears in a transcript. */
+export interface TranscriptPrompt extends PromptEvent {
+  /** ISO 8601. */
+  ts?: string;
+  /** Transcript entry uuid. */
+  entry_id?: string;
+  branch?: string;
+  /** Agent version that wrote the entry. */
+  version?: string;
+}
+
+/** An edit that was applied, joined from its tool call and its result. */
+export interface TranscriptEdit extends EditEvent {
+  /** ISO 8601 time of the result. */
+  ts: string;
+  /** The model of the message that made the call. */
+  model?: string;
+}
+
+export interface TranscriptEvents {
+  prompts: TranscriptPrompt[];
+  edits: TranscriptEdit[];
+  /** Edit calls left out: rejected, failed, or with no result or no time. */
+  skipped: number;
+}
+
 export interface AgentAdapter {
   readonly name: string;
   parsePromptPayload(payload: unknown): PromptEvent | undefined;
@@ -108,6 +145,13 @@ export interface AgentAdapter {
   modelForEdit(ref: EditRef): string | undefined;
   /** Reads a transcript file as a thread, or undefined when it isn't on this machine. */
   readThread(transcriptPath: string): Thread | undefined;
+  /**
+   * Transcripts of sessions started in the repo at `repoRoot` or below it,
+   * each session's main file before its subagents' files.
+   */
+  findTranscripts(repoRoot: string, env: NodeJS.ProcessEnv): TranscriptFile[];
+  /** The prompts and applied edits in one transcript, in order. Undefined when it can't be read. */
+  readTranscriptEvents(file: TranscriptFile): TranscriptEvents | undefined;
   /** Where a subagent's own transcript lives, given the session's main one. */
   subagentTranscriptPath(transcriptPath: string, sessionId: string, agentId: string): string;
   /** Agent version, from the hook's environment. */

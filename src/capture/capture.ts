@@ -11,7 +11,7 @@ import { claudeCode } from '../adapters/claudeCode';
 import type { EditEvent } from '../adapters/types';
 import type { Edit, Turn } from '../store/schema';
 import { findRepo, readHead, repoRelative, type RepoInfo } from './gitDir';
-import { changesFromNewFile, changesFromPatch, changesFromSearch, type LineChanges } from './lineRanges';
+import { changesFromNewFile, changesFromPatch, changesFromSearch, changesFromText, type LineChanges } from './lineRanges';
 import { compilePatterns, preparePrompt, type PromptMode } from './redact';
 
 export type CaptureMode = 'prompt' | 'edit';
@@ -22,7 +22,7 @@ export interface CaptureEnv {
   now?: () => Date;
 }
 
-interface CaptureConfig {
+export interface CaptureConfig {
   prompt: PromptMode;
   redact: RegExp[];
 }
@@ -32,7 +32,7 @@ export function traceHome(env: NodeJS.ProcessEnv): string {
 }
 
 /** Optional ~/.thread-trace/config.json, written by the extension from its settings. */
-function loadConfig(env: NodeJS.ProcessEnv): CaptureConfig {
+export function loadConfig(env: NodeJS.ProcessEnv): CaptureConfig {
   const config: CaptureConfig = { prompt: 'full', redact: [] };
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(traceHome(env), 'config.json'), 'utf8'));
@@ -80,7 +80,7 @@ function appendRecord(repo: RepoInfo, file: 'turns.jsonl' | 'edits.jsonl', recor
 }
 
 /** `${session_id}:${prompt_id}`. Edits carry the same prompt_id, so no state is needed to link them. */
-function turnId(sessionId: string, promptId: string | undefined): string {
+export function turnId(sessionId: string, promptId: string | undefined): string {
   return `${sessionId}:${promptId ?? 'unknown'}`;
 }
 
@@ -110,9 +110,23 @@ function capturePrompt(payload: unknown, { env, now }: CaptureEnv): void {
   appendRecord(repo, 'turns.jsonl', turn);
 }
 
-function lineChanges(event: EditEvent): LineChanges {
+/**
+ * The lines an edit wrote and removed. `locate: false` is for backfill, where
+ * the file on disk is no longer what the edit left behind: without a patch
+ * the hashes are recorded with no positions.
+ */
+export function lineChanges(event: EditEvent, locate = true): LineChanges {
   if (event.patch) return changesFromPatch(event.patch);
   if (event.created_content !== undefined) return changesFromNewFile(event.created_content);
+  if (!locate) {
+    const merged: LineChanges = { hunks: [], removed_hashes: [] };
+    for (const r of event.replacements) {
+      const changes = changesFromText(r.old_string, r.new_string);
+      merged.hunks.push(...changes.hunks);
+      merged.removed_hashes.push(...changes.removed_hashes);
+    }
+    return merged;
+  }
   // No patch in the payload: locate the replacements in the file as it is now.
   let fileText = '';
   try {

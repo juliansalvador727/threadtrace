@@ -98,3 +98,15 @@ export function changesFromSearch(
   }
   return { hunks, removed_hashes: removed };
 }
+
+/**
+ * A replacement whose position isn't known, as when a transcript has the tool
+ * call but no patch: the written lines' hashes, with no line numbers.
+ */
+export function changesFromText(oldString: string, newString: string): LineChanges {
+  const written = splitLines(newString);
+  return {
+    hunks: written.length > 0 ? [{ hashes: written.map(strictHash), loose: written.map(looseHash) }] : [],
+    removed_hashes: splitLines(oldString).map(strictHash),
+  };
+}

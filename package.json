@@ -46,6 +46,16 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
+        "command": "threadTrace.backfill",
+        "title": "Thread Trace: Backfill from Transcripts",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "threadTrace.openOnWeb",
+        "title": "Thread Trace: Open Thread on claude.ai",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
         "command": "threadTrace.toggleAnnotation",
         "title": "Thread Trace: Toggle Line Annotation"
       }
@@ -57,6 +67,24 @@
           "type": "boolean",
           "default": true,
           "description": "Show who wrote the current line (agent, model and time) at the end of the line."
+        },
+        "threadTrace.hover.mode": {
+          "type": "string",
+          "enum": [
+            "annotation",
+            "anywhere"
+          ],
+          "enumDescriptions": [
+            "Show the attribution card only when hovering the end-of-line annotation.",
+            "Also add a one-line attribution to the normal hover of every line."
+          ],
+          "default": "annotation",
+          "description": "Where the attribution appears on hover."
+        },
+        "threadTrace.blame.detectMoves": {
+          "type": "boolean",
+          "default": false,
+          "description": "Follow lines moved or copied from other files (git blame -M -C). Slower on large files."
         }
       }
     }

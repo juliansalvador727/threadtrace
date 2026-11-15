@@ -5,7 +5,8 @@ import type { AgentAdapter } from '../adapters/types';
 import { findRepo, readHead, type RepoInfo } from '../capture/gitDir';
 import { blameLines, type BlameLine } from '../git/blame';
 import type { Git } from '../git/exec';
-import { fileAt, lineHistory } from '../git/log';
+import { fileAt, formerPaths, lineHistory } from '../git/log';
+import { commitTrailers, hasAgentTrailer, type Trailers } from '../git/trailers';
 import { looseHash, splitLines, strictHash } from '../store/hash';
 import type { Attribution, CommitInfo, Confidence, Edit, Hunk } from '../store/schema';
 import type { TraceStore } from '../store/traceStore';
@@ -32,6 +33,12 @@ const FUZZY_MIN = 0.75;
 const REGION = 20;
 const MAX_BLAME_CACHE = 256;
 const MAX_FILE_CACHE = 32;
+const MAX_TRAILER_CACHE = 1024;
+
+export interface ResolverOptions {
+  /** `threadTrace.blame.detectMoves`: blame with `-M -C`. Read on every blame, so a settings change applies at once. */
+  detectMoves?: () => boolean;
+}
 
 type Match = { edit: Edit; older: Edit[] };
 
@@ -85,6 +92,10 @@ export class Resolver {
   private readonly blameCache = new Map<string, Promise<BlameLine[]>>();
   private readonly fileCache = new Map<string, Promise<string[] | undefined>>();
   private readonly chainCache = new Map<string, Promise<CommitInfo[]>>();
+  /** Trailers by commit sha. Commits never change. */
+  private readonly trailerCache = new Map<string, Promise<Trailers>>();
+  /** A file's former paths, by `${HEAD}:${file}`. */
+  private readonly renameCache = new Map<string, Promise<string[]>>();
   /** The blame each attribution came from, for fetching its commit chain later. */
   private readonly origins = new WeakMap<Attribution, BlameLine>();
 
@@ -92,6 +103,7 @@ export class Resolver {
     private readonly git: Git,
     private readonly store: TraceStore,
     private readonly adapter: Pick<AgentAdapter, 'modelForEdit'> = claudeCode,
+    private readonly options: ResolverOptions = {},
   ) {
     this.repo = findRepo(git.root);
   }
@@ -102,10 +114,30 @@ export class Resolver {
     // The empty line after a final newline isn't a line to git.
     if (doc.line < 1 || doc.line > lines.length) return { line: doc.line, confidence: 'none', history: [] };
     const text = lines[doc.line - 1];
-    if (isWeak(text)) return this.resolveWeak(doc, lines);
-    const [blame] = await this.blame(doc, doc.line, doc.line);
+    if (isWeak(text)) return this.withTrailers(await this.resolveWeak(doc, lines));
+    const [blame] = await this.blame(doc, doc.line, doc.line, lines.length);
     if (!blame) throw new Error(`no blame for line ${doc.line}`);
-    return this.resolveStrong(doc, lines, doc.line, blame);
+    return this.withTrailers(await this.resolveStrong(doc, lines, doc.line, blame));
+  }
+
+  /**
+   * Reads the agent trailers of the commit the line landed in. When no record
+   * matched and the commit message names an agent, that is the attribution,
+   * at `commit` confidence: it says which agent, but not which prompt or line.
+   */
+  private async withTrailers(attribution: Attribution): Promise<Attribution> {
+    const { commit } = attribution;
+    if (!commit) return attribution;
+    let pending = this.trailerCache.get(commit.sha);
+    if (!pending) {
+      if (this.trailerCache.size >= MAX_TRAILER_CACHE) this.trailerCache.clear();
+      pending = commitTrailers(this.git, commit.sha);
+      this.trailerCache.set(commit.sha, pending);
+    }
+    // Filled in place: the attribution was built for this call, and `origins` is keyed by it.
+    commit.trailers = await pending;
+    if (attribution.confidence === 'none' && hasAgentTrailer(commit.trailers)) attribution.confidence = 'commit';
+    return attribution;
   }
 
   /**
@@ -137,9 +169,18 @@ export class Resolver {
   private async resolveStrong(doc: DocSnapshot, lines: string[], line: number, blame: BlameLine): Promise<Attribution> {
     const text = lines[line - 1];
     const hash = strictHash(text);
-    const paths = [...new Set([doc.file, blame.origPath])];
+    let paths = [...new Set([doc.file, blame.origPath])];
 
-    const strict = this.candidates(paths, hash, blame, 'strict');
+    let strict = this.candidates(paths, hash, blame, 'strict');
+    if (!strict) {
+      // The record may be under a name the file had before. `git log --follow`
+      // is only run on a miss, to keep it off the common path.
+      const former = await this.formerPaths(doc.file);
+      if (former.some((path) => !paths.includes(path))) {
+        paths = [...new Set([...paths, ...former])];
+        strict = this.candidates(paths, hash, blame, 'strict');
+      }
+    }
     if (strict) {
       const confidence = nearRecordedPosition(strict.edit, hash, line) ? 'exact' : 'likely';
       return this.attribution(line, confidence, blame, strict);
@@ -148,7 +189,7 @@ export class Resolver {
     const loose = this.candidates(paths, looseHash(text), blame, 'loose');
     if (loose) return this.attribution(line, 'modified', blame, loose);
 
-    const fuzzy = await this.fuzzyMatch(doc, lines, line, blame);
+    const fuzzy = await this.fuzzyMatch(doc, lines, line, blame, paths);
     if (fuzzy) return this.attribution(line, 'modified', blame, fuzzy);
 
     return this.attribution(line, 'none', blame);
@@ -164,7 +205,7 @@ export class Resolver {
     const line = doc.line;
     const from = Math.max(1, line - REGION);
     const to = Math.min(lines.length, line + REGION);
-    const blamed = await this.blame(doc, from, to);
+    const blamed = await this.blame(doc, from, to, lines.length);
     const at = (n: number) => blamed.find((entry) => entry.line === n);
     const own = at(line);
     if (!own) throw new Error(`no blame for line ${line}`);
@@ -217,7 +258,7 @@ export class Resolver {
    * that an agent wrote, that is gone from the buffer now, and that is close
    * enough to the current text is the original.
    */
-  private async fuzzyMatch(doc: DocSnapshot, lines: string[], line: number, blame: BlameLine): Promise<Match | undefined> {
+  private async fuzzyMatch(doc: DocSnapshot, lines: string[], line: number, blame: BlameLine, known: string[]): Promise<Match | undefined> {
     const head = this.repo ? readHead(this.repo).head : '';
     const before = blame.committed ? blame.previous : head ? { sha: head, path: doc.file } : undefined;
     if (!before) return undefined;
@@ -229,7 +270,7 @@ export class Resolver {
       stillPresent.add(strictHash(lines[n - 1]));
     }
     const text = lines[line - 1];
-    const paths = [...new Set([doc.file, blame.origPath, before.path])];
+    const paths = [...new Set([...known, before.path])];
     const center = blame.committed ? blame.origLine : line;
     let best: { match: Match; score: number; distance: number } | undefined;
     for (let n = Math.max(1, center - REGION); n <= Math.min(old.length, center + REGION); n++) {
@@ -268,16 +309,43 @@ export class Resolver {
     return attribution;
   }
 
-  private blame(doc: DocSnapshot, from: number, to: number): Promise<BlameLine[]> {
-    if (doc.version === undefined) return blameLines(this.git, doc.file, from, to, doc.text);
-    if (doc.version !== this.blameVersion || this.blameCache.size >= MAX_BLAME_CACHE) {
+  /** Paths the file had before it was renamed. Cached until HEAD moves. */
+  private formerPaths(file: string): Promise<string[]> {
+    const key = `${this.repo ? readHead(this.repo).head : ''}:${file}`;
+    let pending = this.renameCache.get(key);
+    if (!pending) {
+      if (this.renameCache.size >= MAX_FILE_CACHE) this.renameCache.clear();
+      pending = formerPaths(this.git, file);
+      this.renameCache.set(key, pending);
+    }
+    return pending;
+  }
+
+  /** Blame for lines `from`..`to` of a buffer with `total` lines. */
+  private async blame(doc: DocSnapshot, from: number, to: number, total: number): Promise<BlameLine[]> {
+    const detectMoves = this.options.detectMoves?.() ?? false;
+    if (!detectMoves) return this.blameRange(doc, from, to, false);
+    // git only recognizes a move when the moved text is long enough (40
+    // letters and digits across files), and it looks only at the lines it was
+    // asked to blame. One line is rarely enough, so its neighbors are blamed
+    // with it.
+    const start = Math.max(1, from - REGION);
+    const end = Math.min(total, to + REGION);
+    const region = await this.blameRange(doc, start, end, true);
+    return region.filter((entry) => entry.line >= from && entry.line <= to);
+  }
+
+  private blameRange(doc: DocSnapshot, from: number, to: number, detectMoves: boolean): Promise<BlameLine[]> {
+    if (doc.version === undefined) return blameLines(this.git, doc.file, from, to, doc.text, detectMoves);
+    const version = `${doc.version}${detectMoves ? ' -M -C' : ''}`;
+    if (version !== this.blameVersion || this.blameCache.size >= MAX_BLAME_CACHE) {
       this.blameCache.clear();
-      this.blameVersion = doc.version;
+      this.blameVersion = version;
     }
     const key = `${from}-${to}`;
     let pending = this.blameCache.get(key);
     if (!pending) {
-      pending = blameLines(this.git, doc.file, from, to, doc.text);
+      pending = blameLines(this.git, doc.file, from, to, doc.text, detectMoves);
       this.blameCache.set(key, pending);
       // A failed blame shouldn't stick.
       pending.catch(() => this.blameCache.delete(key));

@@ -3,8 +3,8 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { GitService, RepoServices } from '../git/gitService';
-import type { Attribution, Edit, Turn } from '../store/schema';
-import { annotationText, renderCard, type Card, type CardFilter } from './hoverCard';
+import type { Attribution, CommitInfo, Edit, Turn } from '../store/schema';
+import { annotationText, compactLine, renderCard, type Card, type CardFilter } from './hoverCard';
 import type { Revealed, ThreadPanels } from './threadPanel';
 
 const DEBOUNCE_MS = 150;
@@ -34,6 +34,10 @@ function enabled(): boolean {
   return vscode.workspace.getConfiguration('threadTrace').get<boolean>('annotation.enabled', true);
 }
 
+function hoverAnywhere(): boolean {
+  return vscode.workspace.getConfiguration('threadTrace').get<string>('hover.mode', 'annotation') === 'anywhere';
+}
+
 export class LineAnnotation implements vscode.Disposable {
   private readonly decoration = vscode.window.createTextEditorDecorationType({
     after: { margin: '0 0 0 3em', color: new vscode.ThemeColor('editorCodeLens.foreground') },
@@ -45,6 +49,9 @@ export class LineAnnotation implements vscode.Disposable {
   private generation = 0;
   private filter: CardFilter = 'all';
   private shown: LineResult | undefined;
+  /** The line last resolved for an ordinary hover (`hover.mode: "anywhere"`), whose links may name its edits. */
+  private hovered: LineResult | undefined;
+  private hoverProvider: vscode.Disposable | undefined;
 
   constructor(private readonly git: GitService) {
     this.disposables.push(
@@ -56,17 +63,55 @@ export class LineAnnotation implements vscode.Disposable {
         if (event.document === vscode.window.activeTextEditor?.document) this.schedule();
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration('threadTrace.annotation')) this.schedule();
+        if (event.affectsConfiguration('threadTrace.hover')) this.registerHover();
+        // `blame.detectMoves` changes what a line resolves to.
+        if (event.affectsConfiguration('threadTrace.annotation') || event.affectsConfiguration('threadTrace.blame')) this.schedule();
       }),
       vscode.workspace.onDidGrantWorkspaceTrust(() => this.schedule()),
       git.onDidChangeRecords(() => this.schedule()),
     );
+    this.registerHover();
     this.schedule();
   }
 
   /** The attribution currently on screen, if any. */
   get current(): LineResult | undefined {
     return this.shown;
+  }
+
+  /** The attributions a hover link can refer to: the annotation's line, then the last hovered one. */
+  get linkable(): LineResult[] {
+    return [this.shown, this.hovered].filter((result) => result !== undefined);
+  }
+
+  /**
+   * `threadTrace.hover.mode: "anywhere"`: one attribution line added to the
+   * editor's normal hover, on any line. Off by default because it is noisier.
+   */
+  private registerHover(): void {
+    this.hoverProvider?.dispose();
+    this.hoverProvider = undefined;
+    this.hovered = undefined;
+    if (!hoverAnywhere()) return;
+    this.hoverProvider = vscode.languages.registerHoverProvider(
+      { scheme: 'file' },
+      {
+        provideHover: async (document, position) => {
+          try {
+            const result = await this.resolveLine(document, position.line);
+            if (!result) return undefined;
+            this.hovered = result;
+            const line = compactLine(result.attribution, Date.now());
+            const markdown = new vscode.MarkdownString(line.markdown, true);
+            markdown.isTrusted = { enabledCommands: line.enabledCommands };
+            return new vscode.Hover(markdown);
+          } catch {
+            // A failed blame must not break the editor's other hovers.
+            return undefined;
+          }
+        },
+      },
+    );
   }
 
   setFilter(filter: CardFilter): void {
@@ -99,6 +144,7 @@ export class LineAnnotation implements vscode.Disposable {
   dispose(): void {
     clearTimeout(this.timer);
     this.generation++;
+    this.hoverProvider?.dispose();
     for (const disposable of this.disposables) disposable.dispose();
   }
 
@@ -196,7 +242,16 @@ function turnsOf(attribution: Attribution): Turn[] {
   return turns;
 }
 
+/** The line's commits: the one it landed in, then the older ones. */
+function commitsOf(attribution: Attribution): CommitInfo[] {
+  const commits = attribution.commit ? [attribution.commit] : [];
+  for (const entry of attribution.history) if (entry.commit) commits.push(entry.commit);
+  return commits;
+}
+
 const SHA = /^[0-9a-f]{7,64}$/;
+/** Trailers are untrusted; trailers.ts keeps only claude.ai links, and this checks again before opening one. */
+const SESSION_URL = /^https:\/\/claude\.ai\//;
 
 /** Creates the annotation and registers its commands. */
 export function registerAnnotation(context: vscode.ExtensionContext, git: GitService, panels: ThreadPanels): ThreadTraceApi {
@@ -237,10 +292,21 @@ export function registerAnnotation(context: vscode.ExtensionContext, git: GitSer
       await config.update('annotation.enabled', !on, vscode.ConfigurationTarget.Global);
     }),
     command('threadTrace.showThreadForLine', async (editId) => {
-      const result = await forCommand();
-      const threads = result ? threadsOf(result.attribution) : [];
+      let result = await forCommand();
+      let threads = result ? threadsOf(result.attribution) : [];
       // A hover link names the edit; from the palette it is the line's current one.
-      const thread = typeof editId === 'string' ? threads.find(({ edit }) => edit.id === editId) : threads[0];
+      let thread = typeof editId === 'string' ? threads.find(({ edit }) => edit.id === editId) : threads[0];
+      if (!thread && typeof editId === 'string') {
+        // The link may be in the hover of a line the cursor isn't on.
+        for (const other of annotation.linkable) {
+          threads = threadsOf(other.attribution);
+          thread = threads.find(({ edit }) => edit.id === editId);
+          if (thread) {
+            result = other;
+            break;
+          }
+        }
+      }
       if (!result || !thread) {
         void vscode.window.showInformationMessage('Thread Trace: no agent thread is recorded for this line.');
         return;
@@ -256,8 +322,25 @@ export function registerAnnotation(context: vscode.ExtensionContext, git: GitSer
       await vscode.env.clipboard.writeText(turn.prompt);
       vscode.window.setStatusBarMessage('Thread Trace: prompt copied', 2000);
     }),
+    command('threadTrace.openCommitSession', async (sha) => {
+      if (typeof sha !== 'string' || !SHA.test(sha)) return;
+      // The link names a commit; the URL is the one read from that commit's message.
+      const results = [await forCommand(), ...annotation.linkable].filter((result) => result !== undefined);
+      const commit = results.flatMap((result) => commitsOf(result.attribution)).find((entry) => entry.sha === sha);
+      const url = commit?.trailers.session;
+      if (!url || !SESSION_URL.test(url)) {
+        void vscode.window.showInformationMessage('Thread Trace: this commit has no session link.');
+        return;
+      }
+      await vscode.env.openExternal(vscode.Uri.parse(url, true));
+    }),
     command('threadTrace.openOnWeb', async (turnId) => {
-      const url = (await findTurn(turnId))?.thread_url;
+      let url = (await findTurn(turnId))?.thread_url;
+      if (!url && turnId === undefined) {
+        // From the palette: a line known only from its commit's trailer has no turn.
+        const session = (await forCommand())?.attribution.commit?.trailers.session;
+        if (session && SESSION_URL.test(session)) url = session;
+      }
       if (!url?.startsWith('https://')) {
         void vscode.window.showInformationMessage('Thread Trace: this thread has no web link.');
         return;

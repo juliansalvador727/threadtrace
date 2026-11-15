@@ -5,10 +5,21 @@
 //
 // Node-only: the hook bundle imports this, so it must never import vscode.
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PatchHunk } from '../capture/lineRanges';
 import { JsonlFollower } from '../store/jsonlTail';
-import type { AgentAdapter, EditEvent, EditRef, PromptEvent, Thread, ThreadItem, ToolCategory } from './types';
+import type {
+  AgentAdapter,
+  EditEvent,
+  EditRef,
+  PromptEvent,
+  Thread,
+  ThreadItem,
+  ToolCategory,
+  TranscriptEvents,
+  TranscriptFile,
+} from './types';
 
 type Json = Record<string, unknown>;
 
@@ -290,6 +301,21 @@ function promptText(content: unknown): string | undefined {
 }
 
 /**
+ * Who submitted a user entry that holds text:
+ * - 'human': typed by the user, or sent through the SDK;
+ * - 'agent': submitted by Claude Code itself, e.g. when a background task finished;
+ * - 'task': the task a subagent was given, which opens its transcript;
+ * - undefined: a slash command or its output.
+ */
+function promptOrigin(entry: Json, text: string): 'human' | 'agent' | 'task' | undefined {
+  const origin = isObject(entry.origin) ? str(entry.origin.kind) : undefined;
+  const source = str(entry.promptSource);
+  if (source === 'system' || (origin !== undefined && origin !== 'human') || SYNTHETIC_PROMPT.test(text)) return 'agent';
+  if (origin === 'human' || source === 'typed' || source === 'sdk') return 'human';
+  return entry.isSidechain === true ? 'task' : undefined;
+}
+
+/**
  * Reads a transcript as a thread: prompts, assistant text, tool calls, and
  * edits with their diffs. Thinking blocks, tool output, slash commands and
  * bookkeeping entries are left out.
@@ -374,21 +400,149 @@ function readThread(transcriptPath: string): Thread | undefined {
       continue;
     }
 
-    const origin = isObject(entry.origin) ? str(entry.origin.kind) : undefined;
-    const source = str(entry.promptSource);
+    const origin = promptOrigin(entry, text);
     const ts = str(entry.timestamp);
-    if (source === 'system' || (origin !== undefined && origin !== 'human') || SYNTHETIC_PROMPT.test(text)) {
-      // Submitted by Claude Code itself, e.g. when a background task finished.
-      thread.items.push({ kind: 'prompt', id, text: '', origin: 'agent', ts });
-    } else if (origin === 'human' || source === 'typed' || source === 'sdk') {
-      thread.items.push({ kind: 'prompt', id, text, origin: 'human', ts });
-    } else if (entry.isSidechain === true) {
-      // A subagent's transcript opens with the task its parent gave it.
-      thread.items.push({ kind: 'prompt', id, text, origin: 'agent', ts });
-    }
+    // An agent-submitted prompt isn't the user's words, so its text is left out.
+    // A subagent's task is shown: it is what the parent asked for.
+    if (origin === 'agent') thread.items.push({ kind: 'prompt', id, text: '', origin: 'agent', ts });
+    else if (origin === 'human') thread.items.push({ kind: 'prompt', id, text, origin: 'human', ts });
+    else if (origin === 'task') thread.items.push({ kind: 'prompt', id, text, origin: 'agent', ts });
     // Anything else is a slash command or its output.
   }
   return thread;
+}
+
+/** Claude Code names a project's transcript folder after the session's cwd, with every other character turned into '-'. */
+function projectFolder(dir: string): string {
+  return dir.replace(/[^A-Za-z0-9]/g, '-');
+}
+
+function listDir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Transcripts of sessions whose cwd was the repo root or a folder below it.
+ * The folder name is a lossy encoding, so a sibling such as `repo-old` matches
+ * too; the caller drops edits to files outside the repo. A session started
+ * above the repo is not found.
+ */
+function findTranscripts(repoRoot: string, env: NodeJS.ProcessEnv): TranscriptFile[] {
+  const projects = path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
+  const prefix = projectFolder(path.resolve(repoRoot));
+  const files: TranscriptFile[] = [];
+  for (const folder of listDir(projects)) {
+    if (folder !== prefix && !folder.startsWith(`${prefix}-`)) continue;
+    const dir = path.join(projects, folder);
+    for (const name of listDir(dir)) {
+      if (!name.endsWith('.jsonl')) continue;
+      const session_id = name.slice(0, -'.jsonl'.length);
+      const main = path.join(dir, name);
+      files.push({ path: main, session_id, main });
+      for (const sub of listDir(path.join(dir, session_id, 'subagents'))) {
+        const match = /^agent-(.+)\.jsonl$/.exec(sub);
+        if (match) files.push({ path: path.join(dir, session_id, 'subagents', sub), session_id, agent_id: match[1], main });
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * The prompts and applied edits in a transcript, for backfill. An edit is a
+ * `tool_use` joined to its `tool_result`; the result's `toolUseResult` has the
+ * shape of the hook's `tool_response`, so both go through `parseEditPayload`.
+ * The session id is the file's, not the entries': one transcript was seen
+ * whose entries named another session.
+ */
+function readTranscriptEvents(file: TranscriptFile): TranscriptEvents | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file.path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  const events: TranscriptEvents = { prompts: [], edits: [], skipped: 0 };
+  const calls = new Map<string, { name: string; input: Json; model?: string }>();
+
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(entry) || !isObject(entry.message)) continue;
+    const content = entry.message.content;
+
+    if (entry.type === 'assistant') {
+      if (!Array.isArray(content)) continue;
+      const model = str(entry.message.model);
+      for (const block of content) {
+        if (!isObject(block) || block.type !== 'tool_use') continue;
+        const id = str(block.id);
+        const name = str(block.name);
+        if (!id || !name || !EDIT_TOOLS.has(name) || !isObject(block.input)) continue;
+        calls.set(id, { name, input: block.input, model: model === '<synthetic>' ? undefined : model });
+      }
+      continue;
+    }
+
+    if (entry.type !== 'user' || entry.isMeta === true) continue;
+    const cwd = str(entry.cwd) ?? '';
+    const text = promptText(content);
+    if (text !== undefined) {
+      const origin = promptOrigin(entry, text);
+      if (origin !== 'human' && origin !== 'agent') continue;
+      events.prompts.push({
+        session_id: file.session_id,
+        prompt_id: str(entry.promptId),
+        transcript_path: file.main,
+        cwd,
+        prompt: text,
+        human: origin === 'human',
+        ts: str(entry.timestamp),
+        entry_id: str(entry.uuid),
+        branch: str(entry.gitBranch),
+        version: str(entry.version),
+      });
+      continue;
+    }
+
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!isObject(block) || block.type !== 'tool_result') continue;
+      const id = str(block.tool_use_id);
+      const call = id ? calls.get(id) : undefined;
+      if (!id || !call) continue;
+      calls.delete(id);
+      const ts = str(entry.timestamp);
+      const event =
+        block.is_error === true || !ts
+          ? undefined
+          : parseEditPayload({
+              session_id: file.session_id,
+              prompt_id: entry.promptId,
+              transcript_path: file.main,
+              cwd,
+              tool_name: call.name,
+              tool_input: call.input,
+              tool_response: entry.toolUseResult,
+              tool_use_id: id,
+              agent_id: file.agent_id,
+            });
+      if (event && ts) events.edits.push({ ...event, ts, model: call.model });
+      else events.skipped++;
+    }
+  }
+  // Calls whose result never arrived: there is no telling whether they were applied.
+  events.skipped += calls.size;
+  return events;
 }
 
 /** CLAUDE_CODE_EXECPATH ends in the CLI version, e.g. `…/versions/2.1.325`. */
@@ -406,6 +560,8 @@ export const claudeCode: AgentAdapter = {
   modelAtHookTime,
   modelForEdit,
   readThread,
+  findTranscripts,
+  readTranscriptEvents,
   subagentTranscriptPath,
   version,
 };

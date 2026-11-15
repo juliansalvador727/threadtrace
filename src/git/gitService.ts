@@ -44,7 +44,9 @@ export class GitService implements vscode.Disposable {
       if (!repo) {
         const store = new TraceStore(path.join(info.commonDir, 'thread-trace'));
         store.onDidChange(() => this.recordsChanged.fire());
-        repo = { root: info.root, store, resolver: new Resolver(new Git(info.root, api?.git.path || 'git'), store) };
+        const detectMoves = () => vscode.workspace.getConfiguration('threadTrace').get<boolean>('blame.detectMoves', false);
+        const resolver = new Resolver(new Git(info.root, api?.git.path || 'git'), store, undefined, { detectMoves });
+        repo = { root: info.root, store, resolver };
         this.repos.set(info.root, repo);
       }
     }

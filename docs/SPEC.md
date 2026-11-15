@@ -602,3 +602,36 @@ Decided on Nov 15, 2026. Where these differ from "Thread panel", these are what 
 - **Missing transcript:** the panel shows the recorded prompt, the edit's tool, file and line count, and the web link when there is one. The diff exists only in the transcript.
 - **The store parses edit records one file at a time**, on the first lookup for that file. Parsing and indexing all 20k records of acceptance test 11 took about 200 ms, most of the 300 ms budget.
 - **Extra file** beyond the layout: `src/ui/threadHtml.ts`.
+
+### M4 decisions
+
+Decided on Nov 15, 2026. Where these differ from "Transcript backfill", "Commit trailers", "Resolving a line" and "Line resolution edge cases", these are what the code does.
+
+**Backfill**
+
+- **Backfill records have line positions.** A transcript's tool result carries the same `structuredPatch` as the hook's `tool_response` (`toolUseResult`), plus `promptId`, `timestamp` and `cwd`. So a backfilled edit can grade `exact`, not only `likely`. A result without a patch gives hashes with no positions, which grade `likely`; the file on disk is never read, because it is no longer what the edit left behind.
+- **Turn ids match the hook's** (`${session_id}:${promptId}`). An edit whose prompt id matches no prompt entry is linked to the last prompt submitted before it. The session id is the transcript's file name, not the entries' `sessionId`.
+- **Dedup is by `tool_use_id`.** Backfill skips an edit that is already in `edits.jsonl`, whether the hook or an earlier run wrote it, so it can be run any number of times and alongside the hook. Both files stay append-only.
+- **A turn is written only when one of its edits is.** Prompts that led to no edit in this repo are not imported.
+- **Left out:** rejected or failed calls (`is_error`), calls with no result, files outside the repo or under `.git`, slash commands and `isMeta` entries. A prompt Claude Code submitted itself becomes an `'agent'` turn with an empty `prompt`, as in M1. Prompts go through the same redaction and `prompt` mode as the hook (`~/.thread-trace/config.json`).
+- **Unknown at backfill time:** `base_head` is `''` and `git.head` is `''`; `git.branch` comes from the entry's `gitBranch`. `model` is the model of the assistant entry that made the call, so it needs no correction.
+- **Which transcripts:** folders under `<claude dir>/projects/` named after the repo root or a folder below it (every character that isn't a letter or digit becomes `-`). The claude dir is `CLAUDE_CONFIG_DIR`, else `~/.claude`. The name is lossy, so a sibling such as `repo-old` is read too and its edits fall out as "outside the repo". A session started above the repo root is not found. Linked worktrees are not searched.
+- **Subagent edits** come from `<session>/subagents/agent-<id>.jsonl`: `agent_id` from the file name, session and turn from the parent. No local subagent transcript held an edit, so this path is tested with a built transcript only.
+- **Transcripts are read one at a time**, with a cancel check and a yield between files. Reading this repo's six transcripts and writing 60 edits took about 120 ms, so there is no worker pool.
+- **The command** runs for the repo of the active file (else the first workspace folder) and is disabled in untrusted workspaces.
+
+**Trailers**
+
+- **`commit` confidence** is given when no record matched and the blamed commit has an agent trailer: a `Claude-Session:` link, or a `Co-Authored-By:` whose address is `noreply@anthropic.com`. A human co-author doesn't count. A weak line gets it the same way.
+- **Trailers are read for every committed line**, one `git show` per commit, cached by SHA, so a line with a record also gets its commit's session link. The line's older commits carry trailers too.
+- **A commit message is untrusted.** The session link is kept only when it is an `https://claude.ai/` URL with no credentials, no whitespace and at most 500 characters. The co-author name is cut at 80 characters and escaped like any other text.
+- **The card links a session by commit SHA**, through `threadTrace.openCommitSession`. The URL is never in the Markdown; the command reads it from the commit it resolved itself and checks the host again. `threadTrace.openOnWeb` from the palette falls back to it and is now listed in `package.json`.
+- **Annotation for `commit`:** `✦ Claude Opus 5.5 · 2h ago`, with the name from the co-author trailer, or `Claude` when only the session trailer is there.
+
+**Deferred from M2**
+
+- **Squash-merge window: not needed.** The M2 window is only an upper bound (the edit was recorded by commit time plus 10 minutes), and a squash commit is later than the edits it contains. A test covers it.
+- **Rename map:** `git log --follow --name-status` gives the file's former paths. It runs only after the strict lookup on the current and blamed paths misses, and is cached per file until HEAD moves. It matters when a line changed in the same commit as a second rename; blame's original path and `previous` already cover the simpler cases. A `git mv` that isn't committed is not covered.
+- **`threadTrace.blame.detectMoves`** adds `-M -C` to blame. git recognizes a move only when the moved text is long enough and only within the lines it was asked to blame, so with the setting on the resolver blames the 20 lines either side and keeps the one it wants.
+- **`threadTrace.hover.mode: "anywhere"`** registers a `HoverProvider` for `file` documents. It adds one line (the annotation text and an Open thread or Open on claude.ai link), built in `hoverCard.ts`. Links there can name edits and commits of the hovered line as well as the cursor line.
+- **Extra files** beyond the layout: `src/backfill/backfill.ts` (no `vscode`), `test/unit/backfill.test.ts`, `test/unit/trailers.test.ts`.

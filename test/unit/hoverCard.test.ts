@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Attribution, CommitInfo, Edit, Turn } from '../../src/store/schema';
-import { annotationText, escapeText, HOVER_COMMANDS, prettyModel, relativeTime, renderCard } from '../../src/ui/hoverCard';
+import { annotationText, compactLine, escapeText, HOVER_COMMANDS, prettyModel, relativeTime, renderCard } from '../../src/ui/hoverCard';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -164,6 +164,63 @@ describe('renderCard', () => {
   });
 });
 
+describe('commit confidence', () => {
+  const session = 'https://claude.ai/code/session_01AbCdEfGh';
+  const agentCommit: CommitInfo = { ...commit, trailers: { session, coAuthor: 'Claude Opus 5.5' } };
+  const trailerOnly = (trailers = agentCommit.trailers) =>
+    attribution({ confidence: 'commit', edit: undefined, turn: undefined, commit: { ...commit, trailers } });
+
+  it('names the agent from the commit message in the annotation', () => {
+    expect(annotationText(trailerOnly(), NOW)).toBe('✦ Claude Opus 5.5 · 1h ago');
+    expect(annotationText(trailerOnly({ session }), NOW)).toBe('✦ Claude · 1h ago');
+  });
+
+  it('says where the attribution comes from and links the session by sha', () => {
+    const { markdown } = renderCard(trailerOnly(), { now: NOW, file: 'src/a.ts' });
+    expect(markdown).toContain('Co\\-authored by **Claude Opus 5\\.5** · **$(git-commit) commit** · *from the commit message; no prompt or line record on this machine*');
+    expect(markdown).toContain(`[Open on claude.ai](command:threadTrace.openCommitSession?${encodeURIComponent(JSON.stringify([commit.sha]))} `);
+    expect(markdown).not.toContain(session);
+    expect(markdown).toContain('1 commit');
+    expect(markdown).not.toContain('thread ·');
+  });
+
+  it('describes a commit with only the session trailer', () => {
+    const { markdown } = renderCard(trailerOnly({ session }), { now: NOW });
+    expect(markdown).toContain('Made in a Claude session');
+  });
+
+  it('mentions the co-author on a commit under a recorded thread, without the commit badge', () => {
+    const { markdown } = renderCard(attribution({ commit: agentCommit }), { now: NOW });
+    expect(markdown).toContain('Co\\-authored by **Claude Opus 5\\.5**  ');
+    expect(markdown).not.toContain('$(git-commit) commit**');
+    expect(markdown).toContain('Open on claude.ai');
+  });
+
+  it('offers no session link without a session trailer', () => {
+    const { markdown } = renderCard(trailerOnly({ coAuthor: 'Claude Opus 5.5' }), { now: NOW });
+    expect(markdown).not.toContain('openCommitSession');
+  });
+});
+
+describe('compactLine', () => {
+  it('is the annotation text, escaped, with the thread link', () => {
+    const { markdown, enabledCommands } = compactLine(attribution(), NOW);
+    expect(markdown).toBe(
+      `✦ Claude Opus 5\\.5 · 2h ago · 1 thread · [Open thread](command:threadTrace.showThreadForLine?${encodeURIComponent(JSON.stringify(['E1']))} "Open the conversation at this edit")`,
+    );
+    expect(markdown).not.toContain('\n');
+    expect(enabledCommands).toEqual([...HOVER_COMMANDS]);
+  });
+
+  it('is plain blame for a human line, and escapes the author', () => {
+    const human = attribution({ confidence: 'none', edit: undefined, turn: undefined, commit: { ...commit, author: '[x](command:evil) $(zap)' } });
+    const { markdown } = compactLine(human, NOW);
+    expect(markdown).not.toContain('](command:');
+    expect(markdown).not.toContain('$(zap)');
+    expect(linkedCommands(markdown).every((id) => id === 'evil')).toBe(true);
+  });
+});
+
 // Acceptance test 10, the hover half: nothing from a record can add a link or markup.
 describe('10: safety', () => {
   const hostile = '[run](command:workbench.action.terminal.new) <script>alert(1)</script> $(zap) **bold** https://evil.example `code`';
@@ -193,6 +250,18 @@ describe('10: safety', () => {
     for (const id of commands) expect(HOVER_COMMANDS).toContain(id);
     expect(enabledCommands).toEqual([...HOVER_COMMANDS]);
     expect(enabledCommands.every((id) => id.startsWith('threadTrace.'))).toBe(true);
+  });
+
+  it('renders hostile commit trailers as text and never as a link target', () => {
+    const { markdown } = renderCard(
+      attribution({ confidence: 'commit', edit: undefined, turn: undefined, commit: { ...commit, trailers: { coAuthor: hostile, session: 'https://claude.ai/x") [y](command:workbench.action.terminal.new) ("' } } }),
+      { now: NOW },
+    );
+    expect(markdown).not.toContain('<script>');
+    expect(markdown).not.toContain('](command:workbench');
+    expect(markdown).not.toContain('$(zap)');
+    expect(markdown).not.toContain('claude.ai/x');
+    for (const id of linkedCommands(markdown).filter((id) => id !== 'workbench.action.terminal.new')) expect(HOVER_COMMANDS).toContain(id);
   });
 
   it('keeps hostile ids inside the link they belong to', () => {

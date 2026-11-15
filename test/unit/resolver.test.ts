@@ -2,7 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { annotationText, renderCard } from '../../src/ui/hoverCard';
+import { Git } from '../../src/git/exec';
+import { Resolver } from '../../src/resolve/resolver';
+import { TraceStore } from '../../src/store/traceStore';
+import { annotationText, compactLine, renderCard } from '../../src/ui/hoverCard';
 import { DAY, MINUTE, SESSION, T0, TestRepo } from './helpers/repo';
 
 // Resolver tests against real git repos. Numbers refer to the acceptance
@@ -281,6 +284,132 @@ describe('grading', () => {
   it('returns none past the last line instead of failing', async () => {
     agentCommit();
     expect((await repo.resolve('src/app.ts', 99)).confidence).toBe('none');
+  });
+});
+
+const SESSION_URL = 'https://claude.ai/code/session_01AbCdEfGh';
+const TRAILERS = `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: ${SESSION_URL}`;
+
+describe('7: trailer only', () => {
+  /** A commit made by a cloud session: trailers in the message, no records on this machine. */
+  function cloudCommit(): { sha: string } {
+    repo.write('src/app.ts', '// app\n');
+    repo.commit('base', T0 - DAY);
+    repo.write('src/app.ts', ['// app', ...AGENT_BLOCK, ''].join('\n'));
+    return { sha: repo.commit(`Add total helper\n\n${TRAILERS}`, T0 + 5 * MINUTE) };
+  }
+
+  it('shows commit confidence and the session link for a line with no local record', async () => {
+    const { sha } = cloudCommit();
+    const found = await repo.resolve('src/app.ts', 3);
+    expect(found.confidence).toBe('commit');
+    expect(found.edit).toBeUndefined();
+    expect(found.commit).toMatchObject({ sha, trailers: { session: SESSION_URL, coAuthor: 'Claude Opus 5.5' } });
+
+    const now = T0 + 2 * 60 * MINUTE;
+    expect(annotationText(found, now)).toBe('✦ Claude Opus 5.5 · 1h ago');
+    const card = renderCard(found, { now, file: 'src/app.ts' }).markdown;
+    expect(card).toContain('**$(git-commit) commit**');
+    expect(card).toContain('Co\\-authored by **Claude Opus 5\\.5**');
+    expect(card).toContain('[Open on claude.ai](command:threadTrace.openCommitSession?');
+    expect(card).toContain(encodeURIComponent(JSON.stringify([sha])));
+    // The link carries the sha; the URL itself is never put in the card.
+    expect(card).not.toContain('claude.ai/code');
+    expect(compactLine(found, now).markdown).toContain('threadTrace.openCommitSession');
+  });
+
+  it('gives a closing brace in the same commit the same confidence', async () => {
+    cloudCommit();
+    expect((await repo.resolve('src/app.ts', 5)).confidence).toBe('commit');
+  });
+
+  it('leaves a commit without agent trailers as plain blame', async () => {
+    cloudCommit();
+    const found = await repo.resolve('src/app.ts', 1);
+    expect(found.confidence).toBe('none');
+    expect(found.commit?.trailers).toEqual({});
+    expect(annotationText(found, T0)).toMatch(/^Julian, /);
+  });
+
+  it('prefers a matching record, and still carries the trailers for the link', async () => {
+    cloudCommit();
+    repo.addTurn({ id: `${SESSION}:p1` });
+    repo.addEdit({ file: 'src/app.ts', start: 2, lines: AGENT_BLOCK, ts: T0 });
+    const found = await repo.resolve('src/app.ts', 3);
+    expect(found.confidence).toBe('exact');
+    expect(found.commit?.trailers.session).toBe(SESSION_URL);
+    const card = renderCard(found, { now: T0 + DAY, file: 'src/app.ts' }).markdown;
+    expect(card).toContain('Open on claude.ai');
+    expect(card).not.toContain('no prompt or line record');
+  });
+
+  it('ignores a session trailer that does not point at claude.ai', async () => {
+    repo.write('src/app.ts', ['// app', ...AGENT_BLOCK, ''].join('\n'));
+    repo.commit('Add total helper\n\nClaude-Session: https://evil.example/session_1', T0);
+    const found = await repo.resolve('src/app.ts', 3);
+    expect(found.confidence).toBe('none');
+    expect(renderCard(found, { now: T0 + DAY }).markdown).not.toContain('evil');
+  });
+});
+
+describe('renames, moves and squashes', () => {
+  const BODY = Array.from({ length: 12 }, (_, i) => `export const setting${i} = configure(${i});`);
+
+  it('finds a record made under a name the file had two renames ago', async () => {
+    repo.write('src/first.ts', [...BODY, ''].join('\n'));
+    repo.addTurn({ id: `${SESSION}:p1` });
+    repo.addEdit({ file: 'src/first.ts', start: 1, lines: BODY, ts: T0 });
+    repo.commit('Add settings', T0 + 5 * MINUTE);
+    repo.git('mv', 'src/first.ts', 'src/second.ts');
+    repo.commit('Rename', T0 + DAY, 'Dana');
+    // The second rename also re-indents a line, so blame stops at this commit
+    // and knows only the path just before it.
+    repo.git('mv', 'src/second.ts', 'src/third.ts');
+    repo.write('src/third.ts', repo.read('src/third.ts').replace('export const setting3', '  export const setting3'));
+    repo.commit('Rename again and indent', T0 + 2 * DAY, 'Dana');
+
+    const moved = await repo.resolve('src/third.ts', 4);
+    expect(moved.confidence).toBe('modified');
+    expect(moved.edit?.file).toBe('src/first.ts');
+    expect(moved.commit?.summary).toBe('Rename again and indent');
+    // An untouched line is followed by blame itself.
+    expect((await repo.resolve('src/third.ts', 2)).confidence).toBe('exact');
+  });
+
+  it('follows a block moved to another file only when blame.detectMoves is on', async () => {
+    repo.write('src/a.ts', ['// a', ...BODY, ''].join('\n'));
+    repo.write('src/b.ts', '// b\n');
+    repo.addTurn({ id: `${SESSION}:p1` });
+    repo.addEdit({ file: 'src/a.ts', start: 2, lines: BODY, ts: T0 });
+    repo.commit('Add settings', T0 + 5 * MINUTE);
+    repo.write('src/a.ts', '// a\n');
+    repo.write('src/b.ts', ['// b', ...BODY, ''].join('\n'));
+    repo.commit('Move settings to b', T0 + DAY, 'Dana');
+
+    const plain = await repo.resolve('src/b.ts', 5);
+    expect(plain.confidence).toBe('none');
+    expect(plain.commit?.summary).toBe('Move settings to b');
+
+    let detectMoves = true;
+    const resolver = new Resolver(new Git(repo.root), new TraceStore(repo.records), undefined, { detectMoves: () => detectMoves });
+    const doc = { file: 'src/b.ts', line: 5, text: repo.read('src/b.ts'), version: 'v1' };
+    const followed = await resolver.resolve(doc);
+    expect(followed.confidence).toBe('exact');
+    expect(followed.commit?.summary).toBe('Add settings');
+    // Turning the setting off takes effect on the same buffer version.
+    detectMoves = false;
+    expect((await resolver.resolve(doc)).confidence).toBe('none');
+  });
+
+  it('needs no wider window for a squash merge, whose commit is later than the edits', async () => {
+    repo.write('src/app.ts', '// app\n');
+    repo.commit('base', T0 - DAY);
+    repo.write('src/app.ts', ['// app', ...AGENT_BLOCK, ''].join('\n'));
+    repo.addTurn({ id: `${SESSION}:p1` });
+    repo.addEdit({ file: 'src/app.ts', start: 2, lines: AGENT_BLOCK, ts: T0 });
+    // The branch's commits are gone; only the squash commit, days later, is left.
+    repo.commit('Add total helper (#12)', T0 + 3 * DAY);
+    expect((await repo.resolve('src/app.ts', 3)).confidence).toBe('exact');
   });
 });
 

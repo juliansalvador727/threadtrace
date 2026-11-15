@@ -20,7 +20,7 @@ describe('line annotation', () => {
 
   it('registers the annotation commands', async () => {
     const commands = await vscode.commands.getCommands(true);
-    for (const id of ['threadTrace.toggleAnnotation', 'threadTrace.copyPrompt', 'threadTrace.hoverFilter']) {
+    for (const id of ['threadTrace.toggleAnnotation', 'threadTrace.copyPrompt', 'threadTrace.hoverFilter', 'threadTrace.backfill', 'threadTrace.openCommitSession']) {
       assert.ok(commands.includes(id), `${id} is not registered`);
     }
   });
@@ -55,6 +55,57 @@ describe('line annotation', () => {
     const agent = await api.resolveLine(file, 3);
     assert.strictEqual(agent?.confidence, 'exact');
     await vscode.commands.executeCommand('workbench.action.files.revert');
+  });
+
+  // Acceptance test 7.
+  it('shows commit confidence and the session link for a line known only from its commit trailers', async () => {
+    const cloud = vscode.Uri.file(path.join(path.dirname(file.fsPath), 'cloud.ts'));
+    const result = await api.resolveLine(cloud, 1);
+    assert.ok(result, 'the line did not resolve');
+    assert.strictEqual(result.confidence, 'commit');
+    assert.match(result.text, /^✦ Claude Opus 5\.5 · /);
+    assert.ok(result.markdown.includes('Open on claude.ai'), result.markdown);
+    assert.ok(result.markdown.includes('command:threadTrace.openCommitSession'), result.markdown);
+    assert.ok(!result.markdown.includes('session_integration'), 'the URL must not be in the card');
+  });
+
+  // Acceptance test 8, through the command.
+  it('backfills from transcripts, after which the lines resolve to their thread', async () => {
+    const backfilled = vscode.Uri.file(path.join(path.dirname(file.fsPath), 'backfilled.ts'));
+    const before = await api.resolveLine(backfilled, 1);
+    assert.strictEqual(before?.confidence, 'none');
+
+    await vscode.window.showTextDocument(backfilled);
+    await vscode.commands.executeCommand('threadTrace.backfill');
+    const after = await api.resolveLine(backfilled, 1);
+    assert.strictEqual(after?.confidence, 'exact');
+    assert.match(after.text, /^✦ Claude Sonnet 5\.5 · /);
+    assert.ok(after.markdown.includes('Add a discount helper'), after.markdown);
+    // The closing brace takes its block's attribution, as with hook records.
+    assert.strictEqual((await api.resolveLine(backfilled, 2))?.confidence, 'exact');
+
+    // Running it again changes nothing.
+    await vscode.commands.executeCommand('threadTrace.backfill');
+    assert.match((await api.resolveLine(backfilled, 1))?.text ?? '', / · 1 thread$/);
+  });
+
+  it('adds a one-line attribution to ordinary hovers only when hover.mode is "anywhere"', async () => {
+    const config = vscode.workspace.getConfiguration('threadTrace');
+    const hoverText = async () => {
+      const hovers = await vscode.commands.executeCommand<vscode.Hover[]>('vscode.executeHoverProvider', file, new vscode.Position(2, 4));
+      return hovers.flatMap((hover) => hover.contents.map((content) => (typeof content === 'string' ? content : content.value))).join('\n');
+    };
+    await vscode.window.showTextDocument(file);
+    assert.ok(!(await hoverText()).includes('Claude Opus'), 'the hover line is on by default');
+    await config.update('hover.mode', 'anywhere', vscode.ConfigurationTarget.Global);
+    try {
+      const text = await hoverText();
+      assert.ok(text.includes('✦ Claude Opus 5\\.5'), text);
+      assert.ok(text.includes('command:threadTrace.showThreadForLine'), text);
+    } finally {
+      await config.update('hover.mode', undefined, vscode.ConfigurationTarget.Global);
+    }
+    assert.ok(!(await hoverText()).includes('Claude Opus'), 'the hover line stayed on');
   });
 
   it('copies the prompt behind the cursor line', async () => {
