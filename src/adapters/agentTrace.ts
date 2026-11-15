@@ -20,7 +20,7 @@ export const AGENT_TRACE_VERSION = '0.1.0';
 /** Where the records go, relative to the repo root. The spec leaves storage open; this is the common convention. */
 export const AGENT_TRACE_FILE = '.agent-trace/traces.jsonl';
 /** Marks the records this extension wrote (the spec asks vendors to namespace their metadata). */
-export const METADATA_KEY = 'juliansalvador727.thread-trace';
+export const METADATA_KEY = 'JulianSalvador.thread-trace';
 
 const MAX_FILE_CHARS = 5_000_000;
 const MAX_LINES = 10_000;

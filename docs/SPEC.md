@@ -672,7 +672,7 @@ Decided on Nov 15, 2026. Where these differ from "Other surfaces", "Commands", "
 - **What leaves the machine:** paths, line ranges, model ids, session ids and session links. Prompts, transcript paths and `cwd` are never exported.
 - **Only files with edit records are resolved.** A file known only from trailers, or renamed since its records were written, is left out; the confirmation says how many were skipped.
 - **Preview, then confirm.** The command opens the records as an untitled JSON document, then asks in a modal dialog. Nothing is written before "Write".
-- **Re-running replaces, never duplicates.** Records marked with this extension's metadata key (`juliansalvador727.thread-trace`) for the same revision are replaced. Other tools' lines and other revisions' records are kept as they are. The file is written beside the target and renamed.
+- **Re-running replaces, never duplicates.** Records marked with this extension's metadata key (`JulianSalvador.thread-trace`, the extension id) for the same revision are replaced. Other tools' lines and other revisions' records are kept as they are. The file is written beside the target and renamed.
 
 **Settings**
 
