@@ -7,7 +7,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PatchHunk } from '../capture/lineRanges';
-import type { AgentAdapter, EditEvent, PromptEvent } from './types';
+import { JsonlFollower } from '../store/jsonlTail';
+import type { AgentAdapter, EditEvent, EditRef, PromptEvent, Thread, ThreadItem, ToolCategory } from './types';
 
 type Json = Record<string, unknown>;
 
@@ -168,6 +169,228 @@ function modelAtHookTime(event: EditEvent): string | undefined {
   return readModelFromTail(event.transcript_path);
 }
 
+interface TranscriptModels {
+  follower: JsonlFollower;
+  /** tool_use id → the model of the assistant message that made the call. */
+  byToolUse: Map<string, string>;
+}
+
+// One entry per transcript read so far. A live session's transcript grows
+// constantly, so each lookup reads only what was appended since the last one.
+const transcriptModels = new Map<string, TranscriptModels>();
+const MAX_TRANSCRIPTS = 50;
+
+function modelsIn(transcriptPath: string): Map<string, string> {
+  let cached = transcriptModels.get(transcriptPath);
+  if (!cached) {
+    if (transcriptModels.size >= MAX_TRANSCRIPTS) {
+      transcriptModels.delete(transcriptModels.keys().next().value!);
+    }
+    cached = { follower: new JsonlFollower(transcriptPath), byToolUse: new Map() };
+    transcriptModels.set(transcriptPath, cached);
+  }
+  const { lines, reset } = cached.follower.read();
+  if (reset) cached.byToolUse.clear();
+  for (const line of lines) {
+    // Skip the large majority of entries without parsing them.
+    if (!line.includes('"tool_use"') || !line.includes('"assistant"')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(entry) || entry.type !== 'assistant' || !isObject(entry.message)) continue;
+    const model = str(entry.message.model);
+    if (!model || model === '<synthetic>' || !Array.isArray(entry.message.content)) continue;
+    for (const block of entry.message.content) {
+      if (!isObject(block) || block.type !== 'tool_use') continue;
+      const id = str(block.id);
+      if (id) cached.byToolUse.set(id, model);
+    }
+  }
+  return cached.byToolUse;
+}
+
+/**
+ * The model of the assistant message that made this edit's tool call. This is
+ * the reliable value: the hook runs before that message reaches the transcript,
+ * so what it records is a guess.
+ */
+function modelForEdit(ref: EditRef): string | undefined {
+  if (!ref.tool_use_id || !ref.transcript_path) return undefined;
+  try {
+    if (ref.agent_id) {
+      const own = subagentTranscriptPath(ref.transcript_path, ref.session_id, ref.agent_id);
+      const model = modelsIn(own).get(ref.tool_use_id);
+      if (model) return model;
+    }
+    return modelsIn(ref.transcript_path).get(ref.tool_use_id);
+  } catch {
+    return undefined;
+  }
+}
+
+const TOOL_CATEGORIES: Record<string, ToolCategory> = {
+  Read: 'read',
+  NotebookRead: 'read',
+  Grep: 'search',
+  Glob: 'search',
+  LS: 'search',
+  ToolSearch: 'search',
+  Bash: 'command',
+  BashOutput: 'command',
+  WebFetch: 'web',
+  WebSearch: 'web',
+  Agent: 'agent',
+  Task: 'agent',
+};
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+
+/** The one input field that says what a tool call was about. */
+function toolDetail(input: Json): string {
+  for (const key of ['file_path', 'path', 'pattern', 'command', 'url', 'query', 'description', 'prompt']) {
+    const value = str(input[key]);
+    if (value) return value.split('\n')[0].slice(0, 200);
+  }
+  return '';
+}
+
+/** A patch rebuilt from an Edit call's input, for calls whose result isn't in the transcript. Line numbers are unknown. */
+function patchFromInput(input: Json): PatchHunk[] {
+  const replacements = Array.isArray(input.edits) ? input.edits.filter(isObject) : [input];
+  const hunks: PatchHunk[] = [];
+  for (const r of replacements) {
+    if (typeof r.new_string !== 'string') continue;
+    const removed = typeof r.old_string === 'string' && r.old_string !== '' ? r.old_string.split('\n') : [];
+    const added = r.new_string === '' ? [] : r.new_string.split('\n');
+    hunks.push({
+      oldStart: 0,
+      oldLines: removed.length,
+      newStart: 0,
+      newLines: added.length,
+      lines: [...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`)],
+    });
+  }
+  return hunks;
+}
+
+/** The text of a user entry, or undefined when it carries tool results instead of a prompt. */
+function promptText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  const texts: string[] = [];
+  for (const block of content) {
+    if (!isObject(block)) continue;
+    if (block.type === 'tool_result') return undefined;
+    if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text);
+  }
+  return texts.length > 0 ? texts.join('\n') : undefined;
+}
+
+/**
+ * Reads a transcript as a thread: prompts, assistant text, tool calls, and
+ * edits with their diffs. Thinking blocks, tool output, slash commands and
+ * bookkeeping entries are left out.
+ */
+function readThread(transcriptPath: string): Thread | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+  const thread: Thread = { items: [] };
+  const byToolUse = new Map<string, Extract<ThreadItem, { kind: 'tool' | 'edit' }>>();
+  let n = 0;
+
+  for (const line of raw.split('\n')) {
+    if (line === '') continue;
+    // Request logs and other bookkeeping make up most of the file.
+    if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(entry) || !isObject(entry.message)) continue;
+    const id = str(entry.uuid) ?? `entry-${n++}`;
+    thread.session_id ??= str(entry.sessionId) ?? str(entry.session_id);
+    thread.started ??= str(entry.timestamp);
+    thread.branch = str(entry.gitBranch) ?? thread.branch;
+    thread.version = str(entry.version) ?? thread.version;
+    const content = entry.message.content;
+
+    if (entry.type === 'assistant') {
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (!isObject(block)) continue;
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+          thread.items.push({ kind: 'text', id, text: block.text });
+        } else if (block.type === 'tool_use') {
+          const callId = str(block.id);
+          const name = str(block.name);
+          const input = isObject(block.input) ? block.input : {};
+          if (!callId || !name) continue;
+          const file = str(input.file_path);
+          let item: Extract<ThreadItem, { kind: 'tool' | 'edit' }>;
+          if (EDIT_TOOLS.has(name) && file) {
+            // Until the result is seen, show what the call asked for.
+            const created = name === 'Write' ? (typeof input.content === 'string' ? input.content : '') : undefined;
+            item = { kind: 'edit', id: callId, tool: name, file, patch: created === undefined ? patchFromInput(input) : [], created, failed: false };
+          } else {
+            item = { kind: 'tool', id: callId, category: TOOL_CATEGORIES[name] ?? 'other', name, detail: toolDetail(input), failed: false };
+          }
+          thread.items.push(item);
+          byToolUse.set(callId, item);
+        }
+      }
+      continue;
+    }
+
+    if (entry.type !== 'user' || entry.isMeta === true) continue;
+    const text = promptText(content);
+    if (text === undefined) {
+      // Tool results: mark failures, and take an edit's real patch.
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (!isObject(block) || block.type !== 'tool_result') continue;
+        const item = byToolUse.get(str(block.tool_use_id) ?? '');
+        if (!item) continue;
+        if (block.is_error === true) {
+          item.failed = true;
+          continue;
+        }
+        if (item.kind !== 'edit' || !isObject(entry.toolUseResult)) continue;
+        const patch = parsePatch(entry.toolUseResult.structuredPatch);
+        if (patch && patch.length > 0) {
+          // A Write over an existing file: show what changed, not the whole file.
+          item.patch = patch;
+          item.created = undefined;
+        }
+      }
+      continue;
+    }
+
+    const origin = isObject(entry.origin) ? str(entry.origin.kind) : undefined;
+    const source = str(entry.promptSource);
+    const ts = str(entry.timestamp);
+    if (source === 'system' || (origin !== undefined && origin !== 'human') || SYNTHETIC_PROMPT.test(text)) {
+      // Submitted by Claude Code itself, e.g. when a background task finished.
+      thread.items.push({ kind: 'prompt', id, text: '', origin: 'agent', ts });
+    } else if (origin === 'human' || source === 'typed' || source === 'sdk') {
+      thread.items.push({ kind: 'prompt', id, text, origin: 'human', ts });
+    } else if (entry.isSidechain === true) {
+      // A subagent's transcript opens with the task its parent gave it.
+      thread.items.push({ kind: 'prompt', id, text, origin: 'agent', ts });
+    }
+    // Anything else is a slash command or its output.
+  }
+  return thread;
+}
+
 /** CLAUDE_CODE_EXECPATH ends in the CLI version, e.g. `…/versions/2.1.325`. */
 function version(env: NodeJS.ProcessEnv): string | undefined {
   const execPath = env.CLAUDE_CODE_EXECPATH;
@@ -181,5 +404,8 @@ export const claudeCode: AgentAdapter = {
   parsePromptPayload,
   parseEditPayload,
   modelAtHookTime,
+  modelForEdit,
+  readThread,
+  subagentTranscriptPath,
   version,
 };

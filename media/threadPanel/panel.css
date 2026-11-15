@@ -1,1 +1,186 @@
-/* Thread panel styles. Stub: implemented in M3 (docs/SPEC.md). */
+/* Thread panel styles. Colors come from the VS Code theme. */
+body {
+  padding: 0 20px 40px;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  line-height: 1.5;
+}
+
+header.thread {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 0 10px;
+  margin-bottom: 12px;
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+h2 time {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+h2.divider {
+  margin: 28px 0 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.meta {
+  margin: 4px 0 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  margin: 0;
+}
+
+button {
+  padding: 3px 10px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+pre {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+}
+
+pre.text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre.assistant {
+  margin: 12px 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+section.prompt {
+  margin: 20px 0 12px;
+  padding: 8px 12px;
+  background: var(--vscode-textBlockQuote-background);
+  border-left: 3px solid var(--vscode-textLink-foreground);
+}
+
+section.prompt.agent {
+  border-left-color: var(--vscode-descriptionForeground);
+}
+
+.note {
+  margin: 8px 0;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.note.warning {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+details.tools {
+  margin: 8px 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+details.tools summary {
+  cursor: pointer;
+}
+
+details.tools ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  list-style: none;
+}
+
+details.tools .detail {
+  font-family: var(--vscode-editor-font-family);
+  overflow-wrap: anywhere;
+}
+
+article.edit {
+  margin: 12px 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+article.edit header {
+  padding: 4px 10px;
+  background: var(--vscode-sideBarSectionHeader-background);
+}
+
+article.edit .file {
+  font-family: var(--vscode-editor-font-family);
+}
+
+article.edit .note {
+  margin: 6px 10px;
+}
+
+.failed {
+  margin-left: 8px;
+  color: var(--vscode-errorForeground);
+}
+
+pre.diff {
+  padding: 6px 0;
+  overflow-x: auto;
+}
+
+pre.diff span {
+  display: block;
+  padding: 0 10px;
+  min-width: max-content;
+}
+
+pre.diff .add {
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(70, 150, 70, 0.2));
+}
+
+pre.diff .del {
+  background: var(--vscode-diffEditor-removedLineBackground, rgba(200, 70, 70, 0.2));
+}
+
+pre.diff .hunk {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* The tool call that wrote the hovered line. */
+.target {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+article.edit.target header {
+  background: var(--vscode-editor-findMatchHighlightBackground);
+}

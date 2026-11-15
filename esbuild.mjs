@@ -59,6 +59,8 @@ const integrationTests = {
     'test/integration/runTest.ts',
     'test/integration/suite/index.ts',
     'test/integration/suite/activate.test.ts',
+    'test/integration/suite/annotation.test.ts',
+    'test/integration/suite/threadPanel.test.ts',
   ],
   outdir: 'out/test/integration',
   outbase: 'test/integration',

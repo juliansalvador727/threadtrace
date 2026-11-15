@@ -563,3 +563,42 @@ Decided on Nov 15, 2026. Where these differ from the sections above, these are w
 - **Capture settings** reach the hook through an optional `~/.thread-trace/config.json` (`{ "prompt": "full" | "firstLine" | "none", "redact": ["regex", …] }`). The extension doesn't write this file yet; the settings UI is M5.
 - **Records live in the shared git dir**, so linked worktrees of one repo write to the same `thread-trace/` folder.
 - **Extra files** beyond the layout: `src/capture/capture.ts` (the logic, separate from the entry so it can be tested), `src/capture/gitDir.ts`, and `src/install/hookConfig.ts` (the settings merge, free of `vscode`).
+
+### M2 decisions
+
+Decided on Nov 15, 2026. Where these differ from "Resolving a line", "UX" and "Line resolution edge cases", these are what the code does.
+
+- **Uncommitted lines have no lower time bound.** "Any edit since HEAD's time" drops an agent line as soon as an unrelated commit lands before the line is committed.
+- **The time window ends at the later of author and committer time, plus 10 minutes.** Author time alone misses agent edits amended into an older commit. A rebase moves committer time forward, which only widens the window.
+- **Fuzzy matching reads the agent's wording from git**, because records hold hashes, not text. The resolver takes the file before the blamed commit (blame's `previous`), or at HEAD for an uncommitted change, and looks within 20 lines for a line that an agent wrote, that is no longer in the buffer, and that is at least 0.75 similar. An agent line tweaked before either version is committed reaches `modified` only through the loose hash.
+- **Weak lines** are blank lines, lines with no letters or digits, and a short keyword list (`else`, `end`, `return`, `break`, `pass` and similar). There is no per-language list or frequency check. A weak line inherits from its nearest strong neighbor (up to 20 lines away, either side) only when both lines blame to the same commit and the edit's hunk holds the two hashes the same distance apart as in the file.
+- **A file git has never committed** counts as uncommitted on every line, so a new file the agent wrote is attributed before the first commit.
+- **Model correction** happens when a line is resolved: the adapter finds the assistant entry holding the edit's `tool_use_id` (in the subagent's transcript for subagent edits) and uses its model. The result is not written back; `edits.jsonl` stays append-only, and the hook's value is used once the transcript is gone.
+- **The commit chain** (`git log -L`) is fetched in the background after the annotation shows, and the card is re-rendered with it. A hover can't report that it was expanded.
+- **Card order:** the line's current thread and the commit it landed in come first (the commit first for `modified`, with the thread under "Originally written by"), then older threads and commits, newest first, under Today / This week / Older.
+- **Card links** in M2 are Copy prompt, Diff, Copy SHA and the three filter buttons; Open on claude.ai appears only for an `https://` `thread_url`. Open thread comes with the panel in M3. Links carry ids, and the commands validate them.
+- **The read side is off in untrusted workspaces**, because blame runs git in the repo and a repo's git config can run commands.
+- **The store refreshes on every resolve** (two stats when nothing changed) as well as on `fs.watch`, which is unreliable on WSL and can't watch a folder that doesn't exist yet.
+- **Not built yet:** `commit` confidence and trailers (M4), the `--follow` rename map (blame's original path covers committed renames), the squash-merge window, `blame.detectMoves`, and `hover.mode: "anywhere"`.
+- **Extra files** beyond the layout: `src/git/exec.ts` (runs git), `src/git/gitService.ts` (the only git file that imports `vscode`), `src/store/jsonlTail.ts` (incremental JSONL reads, shared by the store and the adapter), and `test/unit/helpers/repo.ts`.
+
+### M3 decisions
+
+Decided on Nov 15, 2026. Where these differ from "Thread panel", these are what the code does.
+
+- **Transcript entries the panel uses** (checked against local transcripts, CLI 2.1.325):
+  - An assistant message is one entry per content block. `text` and `tool_use` blocks are shown; `thinking` blocks are not.
+  - A user entry whose content holds `tool_result` blocks carries a tool's result. `is_error: true` marks a failed or rejected call. For `Edit` and `Write`, `toolUseResult.structuredPatch` is the diff; a created file has an empty patch and the content in the call's input.
+  - A user entry with text is a real prompt when `origin.kind` is `human` or `promptSource` is `typed` or `sdk`. `promptSource: "system"` or another origin is a prompt Claude Code submitted itself. `isMeta` entries and entries with neither field (slash commands and their output) are skipped.
+  - A subagent's transcript opens with a plain user entry (`isSidechain: true`) holding the task its parent gave it.
+- **Nothing is rendered as Markdown.** Prompts and assistant text are shown as escaped plain text. This keeps the "transcript content is untrusted" rule simple to hold.
+- **The page is built in TypeScript** (`src/ui/threadHtml.ts`, no `vscode` import), not from `media/threadPanel/index.html`, which is removed. `panel.css` and `panel.js` stay in `media/`. The CSP is `default-src 'none'`, the panel stylesheet, and one script by nonce.
+- **The webview sends action names only** (`copyPrompt`, `revealTranscript`, `openWeb`, `revealed`). The extension picks the prompt, file or URL from its own state.
+- **Tool calls** between other items collapse into one summary, such as "Ran 3 searches, read 13 files", that opens to a list. Tool output is not shown.
+- **A Write over an existing file** shows the patch, not the whole file. An edit whose result isn't in the transcript yet shows a diff rebuilt from the call's input, without line numbers. A rejected edit is marked "not applied".
+- **Subagent edits:** the panel shows the session's transcript, then the subagent's own transcript under a "Subagent" heading, and scrolls to the call there.
+- **One panel per session.** Opening another line of the same session reuses it and scrolls to the new call.
+- **Long content is cut:** text at 8,000 characters and diffs at 400 lines, with a note of how much was left out.
+- **Missing transcript:** the panel shows the recorded prompt, the edit's tool, file and line count, and the web link when there is one. The diff exists only in the transcript.
+- **The store parses edit records one file at a time**, on the first lookup for that file. Parsing and indexing all 20k records of acceptance test 11 took about 200 ms, most of the 300 ms budget.
+- **Extra file** beyond the layout: `src/ui/threadHtml.ts`.
